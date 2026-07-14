@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.linpj.novel.create.mapper.novel.CharacterRelationshipsMapper">
+
+    <resultMap id="BaseResultMap" type="com.linpj.novel.create.pojo.entity.CharacterRelationships">
+            <id property="id" column="id" jdbcType="BIGINT"/>
+            <result property="bookId" column="book_id" jdbcType="BIGINT"/>
+            <result property="fromCharacterId" column="from_character_id" jdbcType="BIGINT"/>
+            <result property="toCharacterId" column="to_character_id" jdbcType="BIGINT"/>
+            <result property="relationshipType" column="relationship_type" jdbcType="VARCHAR"/>
+            <result property="description" column="description" jdbcType="VARCHAR"/>
+            <result property="createdAt" column="created_at" jdbcType="TIMESTAMP"/>
+            <result property="updatedAt" column="updated_at" jdbcType="TIMESTAMP"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,book_id,from_character_id,
+        to_character_id,relationship_type,description,
+        created_at,updated_at
+    </sql>
+</mapper>

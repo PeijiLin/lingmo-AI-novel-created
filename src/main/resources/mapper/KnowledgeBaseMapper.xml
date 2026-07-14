@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.linpj.novel.create.mapper.knowledge.KnowledgeBaseMapper">
+
+    <resultMap id="BaseResultMap" type="com.linpj.novel.create.pojo.entity.KnowledgeBase">
+            <id property="id" column="id" jdbcType="BIGINT"/>
+            <result property="bookId" column="book_id" jdbcType="BIGINT"/>
+            <result property="userId" column="user_id" jdbcType="BIGINT"/>
+            <result property="name" column="name" jdbcType="VARCHAR"/>
+            <result property="description" column="description" jdbcType="VARCHAR"/>
+            <result property="documentIds" column="document_id" jdbcType="OTHER" typeHandler="com.linpj.novel.create.utils.JsonbTypeHandler"/>
+            <result property="createAt" column="create_at" jdbcType="TIMESTAMP"/>
+            <result property="updateAt" column="update_at" jdbcType="TIMESTAMP"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,book_id,user_id,
+        name,description,document_id,
+        create_at,update_at
+    </sql>
+</mapper>

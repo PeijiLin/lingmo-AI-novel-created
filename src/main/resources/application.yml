@@ -1,0 +1,119 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+    encoding:
+      enabled: true
+      force: true
+      charset: UTF-8
+  shutdown: graceful
+
+
+spring:
+  application:
+    name: "novel-creation-platform"
+  main:
+    allow-bean-definition-overriding: true
+
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+
+  datasource:
+    novel-system:
+      driver-class-name: org.postgresql.Driver
+      jdbc-url: jdbc:postgresql://localhost:5432/novel_system
+      username: postgres
+      password: 123456
+    novel-knowledge:
+      jdbc-url: jdbc:postgresql://192.168.0.106:5432/novel_knowledge_base
+      username: postgres
+      password: 
+      driver-class-name: org.postgresql.Driver
+  data:
+    redis:
+      host: 192.168.0.106
+      port: 6379
+      password: 123456
+      lettuce:
+        pool:
+          max-active: 8
+          max-wait: 5000ms
+      database: 15
+  kafka:
+    bootstrap-servers: 192.168.220.138:9092
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
+      max-poll-records: 20
+    # 生产者（有24个配置）
+    producer:
+      # 配置序列化对象 value默认是StringSerializer.class序列化
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # value 默认是StringSerializer.class序列化
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+    listener:
+      # 批量消费
+      type: batch
+      # 开启消息监听的手动确认模式
+      ack-mode: manual
+
+    template:
+      default-topic: default-topic
+  ai:
+#    dashscope:
+#      api-key: sk-68896b8d3bb047178089960946737677
+#      embedding:
+#        options:
+#          model: text-embedding-v4
+#          dimensions: 1024
+    openai:
+      api-key: sk-8ff3878b272ea504fb85826fa5344a9a
+      chat:
+        api-key: sk-8ff3878b272ea504fb85826fa5344a9a
+        base-url: https://apis.iflow.cn
+        options:
+          model: deepseek-v3.2
+      embedding:
+        api-key: sk-68896b8d3bb047178089960946737677
+        base-url: https://dashscope.aliyuncs.com/compatible-mode
+        options:
+          model: text-embedding-v4
+          dimensions: 1024
+
+mybatis-plus:
+  configuration:
+    # MyBatis 驼峰命名
+    map-underscore-to-camel-case: true
+    # 注解
+#    log-impl: org.apache.ibatis.logging.logback.LogbackImpl
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+
+minio:
+  endpoint: http://192.168.0.105:9000
+  access-key: minioadmin
+  secret-key: minioadmin
+  bucketFileName: student-management-system-file
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+  group-configs:
+    - group: '默认分组'
+      paths-to-match: '/**'
+      packages-to-scan: com.linpj.novel.create.controller
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+    enable-open-api: true

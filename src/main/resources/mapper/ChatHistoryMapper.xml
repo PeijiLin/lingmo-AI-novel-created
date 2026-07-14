@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.linpj.novel.create.mapper.novel.ChatHistoryMapper">
+
+    <resultMap id="BaseResultMap" type="com.linpj.novel.create.pojo.entity.ChatHistory">
+            <id property="id" column="id" jdbcType="BIGINT"/>
+            <result property="bookId" column="book_id" jdbcType="BIGINT"/>
+            <result property="blockDataJsonb" column="block_data_jsonb" jdbcType="OTHER" typeHandler="com.linpj.novel.create.utils.JsonbTypeHandler"/>
+            <result property="messageCount" column="message_count" jdbcType="INTEGER"/>
+            <result property="startTimestamp" column="start_timestamp" jdbcType="TIMESTAMP"/>
+            <result property="endTimestamp" column="end_timestamp" jdbcType="TIMESTAMP"/>
+            <result property="createdAt" column="created_at" jdbcType="TIMESTAMP"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,book_id,block_data_jsonb,
+        message_count,start_timestamp,end_timestamp,
+        created_at
+    </sql>
+</mapper>

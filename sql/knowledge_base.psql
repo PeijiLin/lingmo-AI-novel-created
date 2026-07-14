@@ -1,0 +1,42 @@
+CREATE TABLE novel_kb_documents (
+                                    id BIGSERIAL PRIMARY KEY,
+                                    book_id bigint NOT NULL,          -- 关联的小说项目ID
+                                    file_name VARCHAR(255) NOT NULL,          -- 原始文件名
+                                    file_path VARCHAR(1024),                  -- 文件在服务器上的路径（可选）
+                                    uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    -- 可选：文档摘要、页数等
+                                    metadata JSONB,                           -- 存储额外的文档元数据（如作者、版本等）
+
+    -- 约束
+                                    CONSTRAINT uk_project_file UNIQUE (book_id, file_name)
+);
+
+-- 索引
+CREATE INDEX idx_kb_documents_project_id ON novel_kb_documents(book_id);
+CREATE INDEX idx_kb_documents_file_name ON novel_kb_documents(file_name);
+
+CREATE EXTENSION IF NOT EXISTS vector;
+SELECT * FROM pg_extension WHERE extname = 'vector';
+CREATE TABLE novel_kb_chunks (
+                                 id BIGSERIAL PRIMARY KEY,
+                                 document_id BIGINT NOT NULL,              -- 关联到 novel_kb_documents.id
+                                 chunk_index INTEGER NOT NULL,             -- 该块在原文档中的顺序
+                                 content TEXT NOT NULL,                    -- 文本块内容
+                                 embedding vector(1536),                   -- 向量维度，根据你使用的 embedding 模型调整 (例如，text-embedding-v1 是 1024, text-embedding-v2 是 1536)
+                                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+
+    -- 外键约束（可选）
+    -- CONSTRAINT fk_document FOREIGN KEY (document_id) REFERENCES novel_kb_documents(id) ON DELETE CASCADE,
+
+    -- 约束
+                                 CONSTRAINT chk_chunk_index CHECK (chunk_index >= 0)
+);
+
+-- 索引：对向量进行相似度搜索
+CREATE INDEX idx_kb_chunks_embedding ON novel_kb_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100); -- 调整 lists 参数以平衡性能和精度
+
+-- 索引：按文档ID查询
+CREATE INDEX idx_kb_chunks_document_id ON novel_kb_chunks(document_id);
+
+-- 索引：按项目ID查询（需要关联 novel_kb_documents）
+-- 可以考虑创建一个物化视图或使用 JOIN 查询
