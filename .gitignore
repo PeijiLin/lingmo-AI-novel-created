@@ -47,6 +47,3 @@ replay_pid*
 # Environment / secrets
 application-local.yml
 *.env
-
-# Maven build output
-target/
