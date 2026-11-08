@@ -13,10 +13,12 @@ import com.linpj.novel.create.pojo.dto.CreateBookAddRequest;
 import com.linpj.novel.create.pojo.dto.CreateBookPageRequest;
 import com.linpj.novel.create.pojo.entity.BookInfo;
 import com.linpj.novel.create.pojo.entity.CreateBook;
+import com.linpj.novel.create.pojo.pipeline.ChapterFinalizedMessage;
 import com.linpj.novel.create.pojo.vo.CreateBookVo;
 import com.linpj.novel.create.service.BookInfoService;
 import com.linpj.novel.create.service.CreateBookService;
 import com.linpj.novel.create.mapper.novel.CreateBookMapper;
+import com.linpj.novel.create.producer.CreationEventProducer;
 import com.linpj.novel.create.utils.CommonHandle;
 import com.linpj.novel.create.utils.JsonUtil;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -37,9 +39,13 @@ public class CreateBookServiceImpl extends ServiceImpl<CreateBookMapper, CreateB
 
     private final BookInfoService bookInfoService;
 
-    public CreateBookServiceImpl(RedisTemplate<String, Object> redisTemplate, BookInfoService bookInfoService) {
+    private final CreationEventProducer creationEventProducer;
+
+    public CreateBookServiceImpl(RedisTemplate<String, Object> redisTemplate, BookInfoService bookInfoService,
+                                 CreationEventProducer creationEventProducer) {
         this.redisTemplate = redisTemplate;
         this.bookInfoService = bookInfoService;
+        this.creationEventProducer = creationEventProducer;
     }
 
     /**
@@ -93,6 +99,23 @@ public class CreateBookServiceImpl extends ServiceImpl<CreateBookMapper, CreateB
     @Override
     public void updateCreateBook(CreateBook createBook) {
         this.updateById(createBook);
+        // 章节内容定稿 -> 发 Kafka 事件异步结算（阶段4：滚动摘要 + 人物状态抽取 + 内联伏笔补账）。
+        // 消费者侧幂等（内容 hash 防重），发送失败不影响章节保存本身。
+        if (createBook.getContent() != null) {
+            try {
+                ChapterFinalizedMessage event = new ChapterFinalizedMessage();
+                event.setBookId(createBook.getBookId());
+                event.setChapterId(createBook.getId());
+                event.setTitle(createBook.getTitle());
+                event.setContent(createBook.getContent() instanceof String s
+                        ? s : String.valueOf(createBook.getContent()));
+                creationEventProducer.sendChapterFinalized(event);
+            } catch (Exception e) {
+                // 定稿结算失败不影响章节保存（下次保存会重发）
+                org.slf4j.LoggerFactory.getLogger(CreateBookServiceImpl.class)
+                        .error("章节定稿事件发送失败: chapterId={}", createBook.getId(), e);
+            }
+        }
     }
 
     public CreateBookVo convertToVo(CreateBook createBook) {
