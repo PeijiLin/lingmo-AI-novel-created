@@ -22,6 +22,93 @@ spring:
       max-file-size: 10MB
       max-request-size: 10MB
 
+  # ================================================================
+  # 以下为与 application-dev.yml 对照的默认配置
+  # （application-dev.yml 被 .gitignore 忽略，未上传仓库）
+  # 本地存在 application-dev.yml 时，其中同名配置会覆盖这里的默认值；
+  # 若本地没有该文件，则直接使用下面的默认值启动。
+  # ================================================================
+  datasource:
+    # 主库：小说平台业务库
+    novel-system:
+      driver-class-name: org.postgresql.Driver
+      jdbc-url: jdbc:postgresql://localhost:5432/novel_system
+      username: postgres
+      password: 123456
+    # 知识库：PGVector 向量库
+    novel-knowledge:
+      driver-class-name: org.postgresql.Driver
+      jdbc-url: jdbc:postgresql://192.168.0.106:5432/novel_knowledge_base
+      username: postgres
+      password:
+  data:
+    redis:
+      host: 192.168.0.106
+      port: 6379
+      password: 123456
+      lettuce:
+        pool:
+          max-active: 8
+          max-wait: 5000ms
+      database: 15
+  kafka:
+    bootstrap-servers: 192.168.220.138:9092
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
+      max-poll-records: 20
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    listener:
+      # 批量消费 + 手动确认模式
+      type: batch
+      ack-mode: manual
+    template:
+      default-topic: default-topic
+  ai:
+    openai:
+      # 注意：请替换为你自己的 API Key，不要将真实密钥提交到仓库
+      api-key: sk-xxxx
+      chat:
+        api-key: sk-xxxx
+        # 中转网关，模型为 deepseek-v3.2
+        base-url: https://apis.iflow.cn
+        options:
+          model: deepseek-v3.2
+      embedding:
+        # 通义 DashScope 的 OpenAI 兼容模式
+        api-key: sk-xxxx
+        base-url: https://dashscope.aliyuncs.com/compatible-mode
+        options:
+          model: text-embedding-v4
+          dimensions: 1024
+
+mybatis-plus:
+  configuration:
+    # MyBatis 驼峰命名映射
+    map-underscore-to-camel-case: true
+    # 开发环境将 SQL 打印到控制台，生产环境建议改为 org.apache.ibatis.logging.slf4j.Slf4jImpl
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+
+minio:
+  endpoint: http://192.168.0.105:9000
+  access-key: minioadmin
+  secret-key: minioadmin
+  bucketFileName: student-management-system-file
+
+# JWT 认证配置（原硬编码密钥 hzy123 外部化）
+novel:
+  jwt:
+    # HS256 签名密钥：长度须 >= 32 字节；生产环境务必通过环境变量 NOVEL_JWT_SECRET_KEY 覆盖，勿用默认值
+    secret-key: "novel-creation-platform-default-jwt-secret-change-me-32bytes"
+    # access token 有效期（毫秒），默认 30 分钟
+    expire-millis: 1800000
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html

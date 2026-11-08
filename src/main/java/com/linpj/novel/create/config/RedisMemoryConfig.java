@@ -1,6 +1,6 @@
 package com.linpj.novel.create.config;
 
-import com.alibaba.cloud.ai.memory.redis.RedisChatMemoryRepository;
+import com.alibaba.cloud.ai.memory.redis.JedisRedisChatMemoryRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,9 +20,9 @@ public class RedisMemoryConfig
     private String password;
 
     @Bean("redisChatMemoryRepository")
-    public RedisChatMemoryRepository redisChatMemoryRepository()
+    public JedisRedisChatMemoryRepository redisChatMemoryRepository()
     {
-        return RedisChatMemoryRepository.builder()
+        return JedisRedisChatMemoryRepository.builder()
                     .host(host)
                     .port(port)
                     .password(password)
