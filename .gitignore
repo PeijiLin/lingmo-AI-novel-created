@@ -53,3 +53,5 @@ application-dev.yml
 
 # Local design docs (keep local, not in git)
 docs/
+# Agent temp files
+.temp/
