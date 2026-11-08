@@ -123,6 +123,11 @@ public class BookInfo implements Serializable {
      */
     private String tags;
 
+    /**
+     * 世界观设定（服务端唯一事实源；AI 创作上下文从此读取，前端传入仅作覆盖提示）
+     */
+    private String worldSetting;
+
 
     @TableField(exist = false)
     private static final long serialVersionUID = 1L;
