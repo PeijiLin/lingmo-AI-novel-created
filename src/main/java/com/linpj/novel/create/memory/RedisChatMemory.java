@@ -1,5 +1,5 @@
 // RedisChatMemory.java
-package com.linpj.novel.create.mermory;
+package com.linpj.novel.create.memory;
 
 import org.springframework.stereotype.Component;
 

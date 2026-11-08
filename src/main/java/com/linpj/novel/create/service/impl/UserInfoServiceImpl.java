@@ -39,6 +39,12 @@ public class UserInfoServiceImpl extends ServiceImpl<UserInfoMapper, UserInfo>
     @Resource
     private RedisTemplate<String, Object> redisTemplate;
 
+    private final JwtUtils jwtUtils;
+
+    public UserInfoServiceImpl(JwtUtils jwtUtils) {
+        this.jwtUtils = jwtUtils;
+    }
+
     @Override
     public Map<String, Object> userLogin(UserLoginRequest userLoginRequest) {
         if (StringUtils.isAnyBlank(userLoginRequest.getAccount(),userLoginRequest.getPassword())) {
@@ -62,7 +68,7 @@ public class UserInfoServiceImpl extends ServiceImpl<UserInfoMapper, UserInfo>
         HashMap<String, Object> claims = new HashMap<>();
         claims.put("userId", user.getId());
         // 生成短期access_token
-        String accessToken = JwtUtils.generateJwt(claims);
+        String accessToken = jwtUtils.generateJwt(claims);
 
         // 长期长期refresh_token
         String refreshToken = UUID.randomUUID().toString();
@@ -126,7 +132,7 @@ public class UserInfoServiceImpl extends ServiceImpl<UserInfoMapper, UserInfo>
         // 生成新的 access_token
         HashMap<String, Object> claims = new HashMap<>();
         claims.put("userId", userId);
-        String newAccessToken = JwtUtils.generateJwt(claims);
+        String newAccessToken = jwtUtils.generateJwt(claims);
 
         // 生成新的 refresh_token
         String newRefreshToken = UUID.randomUUID().toString();
@@ -151,7 +157,7 @@ public class UserInfoServiceImpl extends ServiceImpl<UserInfoMapper, UserInfo>
     @Override
     public void logout(String authHeader) {
         String accessToken = authHeader.substring(7); // Bearer xxx
-        String userId = JwtUtils.getUserIdFromToken(accessToken);
+        String userId = jwtUtils.getUserIdFromToken(accessToken);
 
         // 获取该用户所有 refresh_token，并删除
         String userRefreshTokensKey = "user:refresh_tokens:" + userId;
@@ -176,15 +182,17 @@ public class UserInfoServiceImpl extends ServiceImpl<UserInfoMapper, UserInfo>
      * @param account 账户
      * @param password 密码
      */
-    private static void verify(String account,String password) {
-        // 账号校验
-        if (StringUtils.length(account) < 0 && StringUtils.length(account) > 20) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR,"账号不符合");
+    private static void verify(String account, String password) {
+        // 账号校验：长度 1-20（原实现 `<0 && >20` 恒为 false，存在校验失效 bug）
+        int accountLen = StringUtils.length(account);
+        if (accountLen < 1 || accountLen > 20) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "账号不符合");
         }
 
-        // 密码校验
-        if (StringUtils.length(password) < 6 && StringUtils.length(account) > 20) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR,"密码不符合");
+        // 密码校验：长度 6-64（原实现误用账号长度变量判断上限）
+        int passwordLen = StringUtils.length(password);
+        if (passwordLen < 6 || passwordLen > 64) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "密码不符合");
         }
     }
 }
