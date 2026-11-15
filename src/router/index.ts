@@ -4,9 +4,8 @@ import { AUTH_EXPIRED_EVENT } from '@/utils/http'
 
 /**
  * 信息架构（规范 4.1 创作第一）：
- * - 登录后默认进入创作工作台；/ 仅为未登录落地页
- * - 除 login / register / welcome 外全部需登录（不做未登录公开浏览）
- * - 旧门户视图暂以 shell: 'portal' 挂旧壳，随阶段 5 逐一迁移至 AppShell
+ * - 登录后默认进入创作工作台；/ 为未登录落地页
+ * - 除 login / register / welcome 外全部需登录
  */
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -15,7 +14,7 @@ const router = createRouter({
       path: '/',
       name: 'welcome',
       component: () => import('@/views/WelcomeView.vue'),
-      meta: { shell: 'portal', public: true },
+      meta: { public: true },
     },
     {
       path: '/login',
@@ -45,36 +44,43 @@ const router = createRouter({
       name: 'reader',
       component: () => import('@/views/ReaderView.vue'),
       props: true,
-      meta: { shell: 'portal' },
+    },
+    {
+      path: '/book/:id',
+      name: 'bookDetail',
+      component: () => import('@/views/BookDetailView.vue'),
+      props: true,
     },
     {
       path: '/discover',
       name: 'discover',
       component: () => import('@/views/Discover.vue'),
-      meta: { shell: 'portal' },
+    },
+    {
+      path: '/ranking',
+      name: 'ranking',
+      component: () => import('@/views/RankingView.vue'),
     },
     {
       path: '/bookshelf',
       name: 'bookshelf',
       component: () => import('@/views/Bookshelf.vue'),
-      meta: { shell: 'portal' },
     },
     {
       path: '/knowledgeBase/:id',
       name: 'knowledgeBase',
-      component: () => import('@/views/KnowledgeBase.vue'),
-      meta: { shell: 'portal' },
+      component: () => import('@/views/KnowledgeBaseView.vue'),
+      props: true,
     },
     {
       path: '/knowledgeBaseList',
       name: 'knowledgeBaseList',
-      component: () => import('@/views/KnowledgeBaseList.vue'),
-      meta: { shell: 'portal' },
+      component: () => import('@/views/KnowledgeBaseListView.vue'),
     },
   ],
 })
 
-// 全局前置守卫：除公开页外全部需登录
+// 全局前置守卫：除公开页外全部需登录；已登录访问 / 直进创作台
 router.beforeEach((to) => {
   if (to.path === '/' && isAuthenticated()) {
     return { path: '/workbench' }
