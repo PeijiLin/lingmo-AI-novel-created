@@ -1,10 +1,13 @@
 <!-- src/App.vue -->
 <template>
-  <Layout></Layout>
+  <Layout />
+  <!-- 全站轻提示宿主（纸墨自研 Toast） -->
+  <ToastHost />
 </template>
 
 <script setup lang="ts">
-import Layout from "@/components/Layout.vue";
+import Layout from '@/components/Layout.vue'
+import { ToastHost } from '@/components/ui'
 </script>
 
 <style scoped>

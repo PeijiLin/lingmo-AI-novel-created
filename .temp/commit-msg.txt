@@ -1,6 +1,9 @@
-refactor(scaffold): 清理脚手架与占位路由
+feat(ui): 纸墨 design tokens 与 shadcn-vue 组件底座
 
-- 删除重复/占位视图：HomeView、Reader(与ReaderView重复)、LibraryView(保Bookshelf)、UserProfile
-- 删除 counter store；路由移除 /home /settings /profile /ranking /read/:id 占位
-- 清理教学注释；侧边栏仅保留现存有效路由
-- Element Plus 暂留（绞杀者迁移，阶段6移除）；build-only 守门通过
+- styles/tokens.css：8 色彩 token 双轨暴露（:root 原名 + @theme 工具类），间距/圆角/投影/动效，三字体族（楷/宋/黑）
+- styles/base.css：reset、焦点可达性、prefers-reduced-motion、纸感滚动条；main.css 收敛为入口，删 tailwind.config.ts（Tailwind4 CSS-first）
+- index.html：中文字体 CDN（unicode-range 分片即按需子集）+ zh-CN + 纸墨书卷标题
+- 新增依赖 reka-ui/cva/clsx/tailwind-merge/lucide-vue-next
+- components/ui：Button/Card/Input/Textarea/Separator/Badge/Skeleton/Dialog/Sheet/Tabs/Select/DropdownMenu/Toast，全部纸墨皮肤零默认样式泄露
+- composables/useToast + ToastHost 挂载 App.vue
+- 守门：build-only 通过；vue-tsc 存量 29 错（全部旧文件，新增 0）
