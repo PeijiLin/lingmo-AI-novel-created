@@ -23,7 +23,7 @@ import {
 import { ChevronDown, ChevronUp, Check } from 'lucide-vue-next'
 import { cn } from '@/utils/cn'
 
-const props = defineProps<{
+defineProps<{
   options: SelectOption[]
   placeholder?: string
   disabled?: boolean

@@ -5,7 +5,7 @@
  */
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { BookOpen, RefreshCw } from 'lucide-vue-next'
+import { RefreshCw } from 'lucide-vue-next'
 import AppShell from '@/layouts/AppShell.vue'
 import { Button, Skeleton } from '@/components/ui'
 import BookScrollCard from '@/components/base/BookScrollCard.vue'

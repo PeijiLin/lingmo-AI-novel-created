@@ -19,6 +19,13 @@ export default defineConfigWithVueTs(
   pluginVue.configs['flat/essential'],
   vueTsConfigs.recommended,
 
+  {
+    // ui 原子件与单字路由页遵循 shadcn-vue 命名（Button.vue / Card.vue / Discover.vue）
+    name: 'app/multi-word-off',
+    rules: {
+      'vue/multi-word-component-names': 'off',
+    },
+  },
 
   {
     ...pluginVitest.configs.recommended,

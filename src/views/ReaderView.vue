@@ -4,7 +4,7 @@
  * 墨线晕染：当前章节如墨滴晕开，读完留淡墨痕（与朱批「一红一墨」对偶）。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { ArrowLeft, ArrowRight, BookOpen, List } from 'lucide-vue-next'
 import AppShell from '@/layouts/AppShell.vue'
 import { Button, Sheet } from '@/components/ui'
@@ -14,7 +14,6 @@ import type { BookChapterVo, BookInfoVo } from '@/api/types'
 import { cn } from '@/utils/cn'
 
 const route = useRoute()
-const router = useRouter()
 const toast = useToast()
 
 const bookId = Number(route.params.id)

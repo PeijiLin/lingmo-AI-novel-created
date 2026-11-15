@@ -79,7 +79,6 @@ export function useAiCreation() {
 
   const notes = reactive<VermilionNote[]>([])
 
-  let activeNoteId: number | null = null
   let abortController: AbortController | null = null
   let pollTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -110,7 +109,6 @@ export function useAiCreation() {
       anchorPos,
       status: 'streaming',
     })
-    activeNoteId = id
     return id
   }
 
