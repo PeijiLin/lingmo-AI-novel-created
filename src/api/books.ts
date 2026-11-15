@@ -43,6 +43,19 @@ export function getBookInfo(bookId: number): Promise<BookInfoVo> {
 }
 
 /**
+ * 新建作品（book_info 落库）。
+ * 预留端点：后端暂无建书接口（旧版作品由种子数据入库），调用失败由调用方降级提示。
+ */
+export function createBook(payload: {
+  bookName: string
+  bookDesc?: string
+  workDirection?: number
+  authorId?: number
+}): Promise<BookInfoVo> {
+  return http.post<BookInfoVo>('/book/create', payload)
+}
+
+/**
  * 发布作品（草稿 → 发布二态）。
  * 预留端点：后端规范 6 演进项尚未实现，调用失败由调用方降级提示，不阻塞创作主线。
  */

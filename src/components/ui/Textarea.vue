@@ -6,7 +6,7 @@ defineProps<{
   rows?: number
   disabled?: boolean
   readonly?: boolean
-  maxlength?: number
+  maxlength?: string | number
 }>()
 
 const model = defineModel<string>()

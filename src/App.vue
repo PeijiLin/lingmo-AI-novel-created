@@ -1,21 +1,19 @@
-<!-- src/App.vue -->
+<!-- src/App.vue：按路由 meta.shell 决定旧门户壳或裸视图（绞杀者迁移期） -->
 <template>
-  <Layout />
+  <Layout v-if="shell === 'portal'">
+    <RouterView />
+  </Layout>
+  <RouterView v-else />
   <!-- 全站轻提示宿主（纸墨自研 Toast） -->
   <ToastHost />
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import Layout from '@/components/Layout.vue'
 import { ToastHost } from '@/components/ui'
-</script>
 
-<style scoped>
-/* 为小屏幕设备添加响应式支持 */
-@media (max-width: 768px) {
-  main {
-    margin-left: 0;
-    padding: 1rem;
-  }
-}
-</style>
+const route = useRoute()
+const shell = computed(() => route.meta.shell)
+</script>

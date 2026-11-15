@@ -8,6 +8,7 @@ defineProps<{
   readonly?: boolean
   autocomplete?: string
   name?: string
+  maxlength?: string | number
 }>()
 
 const model = defineModel<string>()

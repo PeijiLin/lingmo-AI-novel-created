@@ -1,34 +1,46 @@
-// src/store/user.ts
+// 用户登录态（Pinia）
 import { defineStore } from 'pinia'
-import {getAccessToken, getUserId, clearTokens, setTokens, getAuthor} from '@/utils/token.ts'
+import {
+  clearTokens,
+  getAccessToken,
+  getAuthorId,
+  getUserId,
+  isAuthenticated,
+  setAuthorId,
+  setTokens,
+} from '@/utils/token'
+import type { TokenPair } from '@/utils/token'
 
 export const useUserStore = defineStore('user', {
   state: () => ({
     accessToken: getAccessToken() || '',
-    userId: getUserId() || null,
-    isLoggedIn: !!getAccessToken(),
-    authorId: getAuthor()
+    userId: getUserId(),
+    isLoggedIn: isAuthenticated(),
+    authorId: getAuthorId(),
   }),
-
 
   getters: {
     isAuthed: (state) => state.isLoggedIn,
   },
 
-
   actions: {
-    login(data: { access_token: string; refresh_token: string; userId: number }) {
+    login(data: TokenPair) {
       this.accessToken = data.access_token
       this.userId = data.userId
       this.isLoggedIn = true
-      // 同步到 localStorage
       setTokens(data)
+    },
+
+    setAuthor(authorId: number | null) {
+      this.authorId = authorId
+      setAuthorId(authorId)
     },
 
     logout() {
       this.accessToken = ''
       this.userId = null
       this.isLoggedIn = false
+      this.authorId = null
       clearTokens()
     },
   },

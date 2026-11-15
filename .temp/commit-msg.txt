@@ -1,9 +1,10 @@
-feat(core): HTTP/SSE 收敛为单实例与类型化客户端
+feat(creation): 创作核心重做——四档流水线与朱砂旁注
 
-- utils/http.ts：fetch 单实例，信封解包，40100/40101/401 → 单飞刷新队列 + 重放原请求（修复旧版丢请求缺陷），失败清令牌并广播登出事件；工厂注入依赖可测
-- utils/sse.ts：按后端 ProgressEmitter 实况解析 stage/content/[DONE]，空闲超时熔断 + abort + 401 单飞重连；解析器纯函数化
-- utils/tiptap.ts：textToTiptapDoc 段落保留修复（旧版 \s+ 压扁缺陷）+ 文档转纯文本 + 中文字数
-- utils/token.ts：类型收紧、normalizeRefreshToken 防御后端 refresh_token 误带前缀缺陷、旧命名兼容
-- src/api：类型化客户端 auth/books/chapters/knowledge/shelf/pipeline（pipeline 四档 + SSE + 异步任务轮询）；旧生成树暂留待阶段6移除
-- vitest 24 用例全绿：单飞刷新/SSE 解析/段落保留
-- 守门：build-only 通过；类型错误精确回到存量 29（新代码零错误）
+- layouts/AppShell（创作第一主导航）+ CreationShell（沉浸三栏工作台壳）；路由：登录默认落创作台，除 login/register/welcome 外全登录守卫，登出事件接线
+- base/DraftPaper：Tiptap 稿纸（霞鹜文楷/克制工具栏/字数/选区上报），decoration 锚定段落 + coordsAtPos 浮动朱批层，采纳才落笔
+- base/VermilionNote 朱批卡：朱砂红底/墨字/细朱线/可折叠/采纳与放弃
+- base/PipelinePanel：四档模式卡（FAST/STANDARD/REFINED/PRECISE）+ 重写上限 + 流式/整章通道 + 墨线进度时间线 + token 用量与降级标记
+- base/ChapterTree 章节树 + base/BookScrollCard 书卷陈列卡
+- composables/useAiCreation：SSE stage 时间线/REVISION 轮次/usage、content 流式入朱批、异步 taskId 轮询（完成后重载章节）、abort
+- views/CreatorView 重做（窄屏流水线抽屉 + Ctrl+S + 重命名）+ views/WorkbenchView 新建（作品陈列 + 新建作品引导，建书/发布预留端点优雅降级）
+- 守门：vitest 24 全绿；build 通过；类型错误仅存量 24（旧文件）
