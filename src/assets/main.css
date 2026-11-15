@@ -1,0 +1,83 @@
+@import './base.css';
+@import "tailwindcss";
+#app {
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  font-weight: normal;
+  height: 100vh;
+}
+
+a,
+.green {
+  text-decoration: none;
+  color: hsla(160, 100%, 37%, 1);
+  transition: 0.4s;
+  padding: 3px;
+}
+
+@media (hover: hover) {
+  a:hover {
+    background-color: hsla(160, 100%, 37%, 0.2);
+  }
+}
+
+/* 阅读器专用样式变量 */
+:root {
+  --reader-font-size: 16px;
+  --reader-line-height: 1.6;
+}
+
+/* 阅读模式下的全局样式 */
+.reader-mode {
+  font-family: 'Microsoft YaHei', 'SimSun', serif;
+}
+
+.reader-mode .chapter-content {
+  text-align: justify;
+  word-break: break-all;
+}
+
+/* 移除默认的页面边距 */
+@media (min-width: 1024px) {
+  body {
+    display: block;
+    place-items: unset;
+    margin: 0;
+    padding: 0;
+  }
+
+  #app {
+    display: block;
+    grid-template-columns: none;
+    padding: 0;
+  }
+}
+
+/* 滚动条样式优化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+/* 暗色主题下的滚动条 */
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
