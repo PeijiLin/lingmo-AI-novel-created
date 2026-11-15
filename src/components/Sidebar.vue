@@ -39,22 +39,15 @@ import {
   HomeFilled,
   Search,
   Notebook,
-  EditPen,
-  Trophy,
-  User,
-  Setting,
   Document
 } from '@element-plus/icons-vue'
 
+// 仅保留现存有效路由；工作台/排行等待后续阶段转正重建
 const menuItems = [
   { key: 'home', label: '首页', route: '/', iconComponent: HomeFilled },
   { key: 'discover', label: '发现好书', route: '/discover', iconComponent: Search },
   { key: 'bookshelf', label: '书架', route: '/bookshelf', iconComponent: Notebook },
-  { key: 'library', label: '创作者中心', route: '/library', iconComponent: EditPen },
   { key: 'knowledgeBaseList', label: '创作知识库', route: '/knowledgeBaseList', iconComponent: Document},
-  { key: 'ranking', label: '排行', route: '/ranking', iconComponent: Trophy },
-  { key: 'profile', label: '我的', route: '/profile', iconComponent: User },
-  { key: 'settings', label: '设置', route: '/settings', iconComponent: Setting },
 ]
 </script>
 

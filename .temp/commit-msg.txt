@@ -1,4 +1,6 @@
-chore(repo): 建立前端仓库基线
+refactor(scaffold): 清理脚手架与占位路由
 
-收录重构前完整状态：Vue3.5 + Element Plus + Tailwind4 + Tiptap 现状，
-含 docs 设计规范与重构执行计划，作为绞杀者迁移的回溯基线。
+- 删除重复/占位视图：HomeView、Reader(与ReaderView重复)、LibraryView(保Bookshelf)、UserProfile
+- 删除 counter store；路由移除 /home /settings /profile /ranking /read/:id 占位
+- 清理教学注释；侧边栏仅保留现存有效路由
+- Element Plus 暂留（绞杀者迁移，阶段6移除）；build-only 守门通过

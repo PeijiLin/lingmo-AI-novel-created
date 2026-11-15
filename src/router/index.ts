@@ -1,14 +1,5 @@
-import HomeView from '@/views/HomeView.vue'
-import LibraryView from '@/views/LibraryView.vue'
-import CreatorView from '@/views/CreatorView.vue'
-import ReaderView from '@/views/ReaderView.vue'
-import {createWebHistory, createRouter} from "vue-router";
-import WelcomeView from "@/views/WelcomeView.vue";
-import Bookshelf from '@/views/Bookshelf.vue';
-import LoginView from '@/views/LoginView.vue';
-import {isAuthenticated} from "@/utils/token.ts";
-import knowledgeBase from "@/views/KnowledgeBase.vue";
-import knowledgeBaseList from "@/views/KnowledgeBaseList.vue";
+import { createRouter, createWebHistory } from 'vue-router'
+import { isAuthenticated } from '@/utils/token'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -16,94 +7,60 @@ const router = createRouter({
     {
       path: '/',
       name: 'welcome',
-      component: WelcomeView
+      component: () => import('@/views/WelcomeView.vue'),
     },
     {
       path: '/login',
       name: 'login',
-      component: LoginView
+      component: () => import('@/views/LoginView.vue'),
     },
     {
       path: '/register',
       name: 'register',
-      component: () => import('@/views/RegisterView.vue')
-    },
-    {
-      path: '/read/:id',
-      name: 'Reader',
-      component: () => import('../views/ReaderView.vue'),
-      props: true
-    },
-    {
-      path: '/library',
-      name: 'library',
-      component: LibraryView,
-      meta: { requiresAuth: true }, // ← 加上这行
-    },
-    {
-      path: '/discover',
-      name: 'Discover',
-      component: () => import('../views/Discover.vue')
-    },
-    {
-      path: '/bookshelf',
-      name: 'bookshelf',
-      component: Bookshelf,
-      meta: { requiresAuth: true }, // ← 加上这行
-    },
-    {
-      path: '/creator/:id',
-      name: 'creator',
-      component: CreatorView,
-      meta: { requiresAuth: true }, // ← 加上这行
+      component: () => import('@/views/RegisterView.vue'),
     },
     {
       path: '/reader/:id',
       name: 'reader',
-      component: ReaderView,
-      props: true
+      component: () => import('@/views/ReaderView.vue'),
+      props: true,
     },
     {
-      path: '/ranking',
-      name: 'ranking',
-      component: () => import('@/views/HomeView.vue') // 临时使用HomeView，后续可替换
+      path: '/discover',
+      name: 'discover',
+      component: () => import('@/views/Discover.vue'),
     },
     {
-      path: '/profile',
-      name: 'profile',
-      component: () => import('@/views/UserProfile.vue') // 临时使用HomeView，后续可替换
+      path: '/bookshelf',
+      name: 'bookshelf',
+      component: () => import('@/views/Bookshelf.vue'),
+      meta: { requiresAuth: true },
     },
     {
-      path: '/settings',
-      name: 'settings',
-      component: () => import('@/views/HomeView.vue') // 临时使用HomeView，后续可替换
-    },
-    {
-      path: '/home',
-      name: 'home',
-      component: HomeView
+      path: '/creator/:id',
+      name: 'creator',
+      component: () => import('@/views/CreatorView.vue'),
+      meta: { requiresAuth: true },
     },
     {
       path: '/knowledgeBase/:id',
       name: 'knowledgeBase',
-      component: knowledgeBase
+      component: () => import('@/views/KnowledgeBase.vue'),
     },
     {
       path: '/knowledgeBaseList',
       name: 'knowledgeBaseList',
-      component: knowledgeBaseList
+      component: () => import('@/views/KnowledgeBaseList.vue'),
     },
-  ]
+  ],
 })
 
-// 全局前置守卫
-router.beforeEach((to, from, next) => {
-  const requiresAuth = to.matched.some((record) => record.meta.requiresAuth)
-
-  if (requiresAuth && !isAuthenticated()) {
-    next('/login')
-  } else {
-    next()
+// 全局前置守卫：requiresAuth 路由未登录时跳登录页
+router.beforeEach((to) => {
+  if (to.meta.requiresAuth && !isAuthenticated()) {
+    return { path: '/login', query: { redirect: to.fullPath } }
   }
+  return true
 })
+
 export default router
