@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { cn } from '@/utils/cn'
 
-defineProps<{
-  /** paper：纸面白卡 + 投影（默认陈列卡）；plain：无底色面板容器 */
-  variant?: 'paper' | 'plain'
-  /** 可交互卡片（有悬停与指针） */
-  interactive?: boolean
-}>()
+// interactive 缺省 false（Vue 布尔转型），显式声明以便读侧不依赖隐式转型
+withDefaults(
+  defineProps<{
+    /** paper：纸面白卡 + 投影（默认陈列卡）；plain：无底色面板容器 */
+    variant?: 'paper' | 'plain'
+    /** 可交互卡片（有悬停与指针） */
+    interactive?: boolean
+  }>(),
+  { variant: 'paper', interactive: false },
+)
 </script>
 
 <template>

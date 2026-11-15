@@ -8,11 +8,14 @@ import { BookText } from 'lucide-vue-next'
 import { cn } from '@/utils/cn'
 import type { BookInfoVo } from '@/api/types'
 
-const props = defineProps<{
-  book: BookInfoVo
-  /** 可点击（跳详情/创作台） */
-  interactive?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    book: BookInfoVo
+    /** 可点击（跳详情/创作台）；Vue 布尔转型缺省为 false，故显式默认 true */
+    interactive?: boolean
+  }>(),
+  { interactive: true },
+)
 
 const emit = defineEmits<{
   open: [book: BookInfoVo]
