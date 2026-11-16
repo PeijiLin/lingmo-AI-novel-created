@@ -44,7 +44,7 @@ export function getBookInfo(bookId: number): Promise<BookInfoVo> {
 
 /**
  * 新建作品（book_info 落库）。
- * 预留端点：后端暂无建书接口（旧版作品由种子数据入库），调用失败由调用方降级提示。
+ * 后端 POST /book/create 已就绪：authorId 缺省时从登录态自动解析/创建作者档案。
  */
 export function createBook(payload: {
   bookName: string
@@ -56,8 +56,8 @@ export function createBook(payload: {
 }
 
 /**
- * 发布作品（草稿 → 发布二态）。
- * 预留端点：后端规范 6 演进项尚未实现，调用失败由调用方降级提示，不阻塞创作主线。
+ * 发布作品（create_book 草稿 → book_chapter + book_content，幂等）。
+ * 后端 PUT /book/publish 已就绪。
  */
 export function publishBook(bookId: number): Promise<unknown> {
   return http.put<unknown>('/book/publish', { bookId })
@@ -65,7 +65,7 @@ export function publishBook(bookId: number): Promise<unknown> {
 
 /**
  * 阅读量 +1 上报（阅读器打开章节时）。
- * 预留端点：后端规范 6 演进项尚未实现，失败静默降级。
+ * 后端 POST /book/read/increment 已就绪，失败仍静默降级（不阻塞阅读）。
  */
 export function reportChapterRead(chapterId: number, bookId?: number): Promise<unknown> {
   return http.post<unknown>('/book/read/increment', { chapterId, bookId })
@@ -73,7 +73,7 @@ export function reportChapterRead(chapterId: number, bookId?: number): Promise<u
 
 /**
  * 轻量榜单（按阅读量排序）。
- * 预留端点：后端未实现时由调用方回退 pageBooks 客户端排序（规范 6：可先由 pageBookList 兜底）。
+ * 后端 GET /book/ranking 已就绪，直接使用服务端排序。
  */
 export function listRanking(limit?: number): Promise<BookInfoVo[]> {
   return http.get<BookInfoVo[]>('/book/ranking', { params: { limit } })

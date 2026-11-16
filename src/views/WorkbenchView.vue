@@ -11,7 +11,7 @@ import { Button, Card, Dialog, Input, Select, Textarea, Skeleton } from '@/compo
 import BookScrollCard from '@/components/base/BookScrollCard.vue'
 import { useToast } from '@/composables/useToast'
 import { useAuth } from '@/composables/useAuth'
-import { listAuthorBooks } from '@/api/books'
+import { createBook, listAuthorBooks } from '@/api/books'
 import type { BookInfoVo } from '@/api/types'
 
 const router = useRouter()
@@ -53,8 +53,8 @@ async function handleCreate() {
   }
   creating.value = true
   try {
-    // 预留端点（后端待补「建书」接口）：失败降级不阻塞
-    const book = await createReserved({
+    // 后端 POST /book/create 已就绪：authorId 缺省时后端从登录态自动解析/创建作者档案
+    const book = await createBook({
       bookName: name,
       bookDesc: createForm.bookDesc.trim(),
       workDirection: Number(createForm.workDirection),
@@ -66,17 +66,10 @@ async function handleCreate() {
     if (book?.id) router.push(`/creator/${book.id}`)
     else await loadBooks()
   } catch (err) {
-    toast.warning('后端暂未提供建书接口', '作品需先经后端入库；接口就绪后此处直接可用')
-    console.info('createBook reserved endpoint 未就绪', err)
+    toast.error('创建作品失败', err instanceof Error ? err.message : undefined)
   } finally {
     creating.value = false
   }
-}
-
-// 预留：等后端 POST /book/create 就绪后切换为直接调用 api/books.createBook
-async function createReserved(payload: { bookName: string; bookDesc?: string; workDirection?: number }) {
-  const { createBook } = await import('@/api/books')
-  return createBook(payload)
 }
 
 function openCreator(book: BookInfoVo) {

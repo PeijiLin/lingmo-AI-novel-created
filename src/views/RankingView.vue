@@ -9,7 +9,7 @@ import { RefreshCw } from 'lucide-vue-next'
 import AppShell from '@/layouts/AppShell.vue'
 import { Button, Skeleton } from '@/components/ui'
 import { useToast } from '@/composables/useToast'
-import { listRanking, pageBooks } from '@/api/books'
+import { listRanking } from '@/api/books'
 import type { BookInfoVo } from '@/api/types'
 
 const router = useRouter()
@@ -21,21 +21,9 @@ const loading = ref(false)
 async function load() {
   loading.value = true
   try {
-    // 直连预留榜单端点；失败回退分页 + 客户端按阅读量排序
-    try {
-      const data = await listRanking(20)
-      if (Array.isArray(data) && data.length > 0) {
-        rankList.value = data
-        return
-      }
-    } catch {
-      /* 回退 */
-    }
-    const page = await pageBooks({ pageNum: 1, pageSize: 50 })
-    rankList.value = (page.records ?? [])
-      .filter((b) => (b.visitCount ?? 0) > 0)
-      .sort((a, b) => (b.visitCount ?? 0) - (a.visitCount ?? 0))
-      .slice(0, 20)
+    // 后端 GET /book/ranking 已就绪：直接使用服务端按阅读量排序
+    const data = await listRanking(20)
+    rankList.value = Array.isArray(data) ? data : []
   } catch (err) {
     toast.error('榜单加载失败', err instanceof Error ? err.message : undefined)
   } finally {

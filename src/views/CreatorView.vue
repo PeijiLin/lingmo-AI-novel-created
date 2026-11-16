@@ -91,11 +91,9 @@ async function handlePublish() {
   try {
     await handleSave()
     await publishBook(bookId)
-    toast.success('作品已发布', '将出现在发现与排行（榜单接口就绪后即时生效）')
+    toast.success('作品已发布', '草稿已转写为正式章节，将出现在发现与排行')
   } catch (err) {
-    // 预留端点降级（规范 6：发布二态为后端演进项）
-    toast.warning('发布接口暂未开放', '后端补齐「草稿/发布」字段后此处即时可用；草稿已保存')
-    console.info('publishBook reserved endpoint 未就绪', err)
+    toast.error('发布失败', err instanceof Error ? err.message : undefined)
   } finally {
     publishing.value = false
   }

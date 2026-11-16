@@ -38,7 +38,7 @@ async function openChapter(chapter: BookChapterVo) {
   try {
     const data = await getChapterContent(chapter.id!)
     content.value = data.content ?? ''
-    // 阅读量 +1（预留端点，失败静默降级）
+    // 阅读量 +1 上报（后端接口已就绪；失败静默降级，不阻塞阅读）
     reportChapterRead(chapter.id!, bookId).catch(() => undefined)
     // 记录本地阅读进度
     try {
