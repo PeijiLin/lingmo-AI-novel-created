@@ -23,7 +23,14 @@ public class WebMvcConfig implements WebMvcConfigurer {
         registry.addInterceptor(authInterceptor)
                 .addPathPatterns("/**")  // 拦截所有请求
                 .excludePathPatterns(
-                        "/book/**",                          // ✅ 包含所有 /book/ 开头的路径
+                        // 公开读接口：书目/章节/内容/榜单/阅读上报
+                        "/book/page",
+                        "/book/category/list",
+                        "/book/chapter/page",
+                        "/book/content",
+                        "/book/ranking",
+                        "/book/read/increment",
+                        // 认证接口
                         "/user/login",
                         "/user/register",
                         "/user/refresh-token",
