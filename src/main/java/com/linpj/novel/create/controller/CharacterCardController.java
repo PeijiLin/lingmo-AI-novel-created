@@ -80,13 +80,15 @@ public class CharacterCardController {
     }
 
     /**
-     * 搜索角色卡（模糊匹配）
+     * 搜索角色卡（模糊匹配，前端传 keyword；兼容历史 name 命名）
      */
     @GetMapping("/project/{bookId}/search")
     public BaseResponse<List<CharacterCardsVo>> searchCharacterCards(
             @PathVariable Long bookId,
-            @RequestParam String name) {
-        List<CharacterCardsVo> cards = characterCardService.searchCharacterCards(bookId, name);
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "name", required = false) String name) {
+        String kw = org.apache.commons.lang3.StringUtils.isNotBlank(keyword) ? keyword : name;
+        List<CharacterCardsVo> cards = characterCardService.searchCharacterCards(bookId, kw);
         return ResultUtils.success(cards);
     }
 }

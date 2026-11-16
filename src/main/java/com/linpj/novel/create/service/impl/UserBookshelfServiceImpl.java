@@ -1,6 +1,7 @@
 package com.linpj.novel.create.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.linpj.novel.create.context.UserStatusContext;
 import com.linpj.novel.create.exception.BusinessException;
 import com.linpj.novel.create.exception.ErrorCode;
 import com.linpj.novel.create.exception.ThrowsUtils;
@@ -36,9 +37,13 @@ public class UserBookshelfServiceImpl extends ServiceImpl<UserBookshelfMapper, U
     public Long addBook(BookShelfAddRequest bookShelfAddRequest) {
         // 参数校验
         Long bookId = bookShelfAddRequest.getBookId();
+        // userId 未显式传时取当前登录用户（前端「加入书架」不传 userId）
         Long userId = bookShelfAddRequest.getUserId();
+        if (userId == null || userId <= 0) {
+            userId = UserStatusContext.getCurrentUserId();
+        }
         if (bookId == null || userId == null || bookId <= 0 || userId <= 0) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "请先登录再加入书架");
         }
         BookInfo bookInfo = bookInfoService.getById(bookId);
         UserInfo userInfo = userInfoService.getById(userId);
