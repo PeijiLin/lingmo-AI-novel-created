@@ -67,6 +67,11 @@ const router = createRouter({
       component: () => import('@/views/Bookshelf.vue'),
     },
     {
+      path: '/profile',
+      name: 'profile',
+      component: () => import('@/views/ProfileView.vue'),
+    },
+    {
       path: '/knowledgeBase/:id',
       name: 'knowledgeBase',
       component: () => import('@/views/KnowledgeBaseView.vue'),

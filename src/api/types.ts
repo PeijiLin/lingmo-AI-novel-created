@@ -163,6 +163,48 @@ export interface BookShelfAddRequest {
   userId?: number
 }
 
+/* ---------------- 个人主页 ---------------- */
+
+/** 用户资料（/user/me，不含密码） */
+export interface UserProfileVo {
+  id?: number
+  username?: string
+  nickName?: string
+  userPhoto?: string
+  /** 0-男 1-女，未设置为 null */
+  userSex?: number | null
+  accountBalance?: number | null
+  createTime?: string | number
+}
+
+export interface UserProfileUpdateRequest {
+  /** 传 null/undefined 表示不变更 */
+  nickName?: string | null
+  userSex?: number | null
+}
+
+/** 作者档案（/author/me，未开档时后端返回 null） */
+export interface AuthorProfileVo {
+  id?: number
+  penName?: string
+  /** 0-男频 1-女频，未设置为 null */
+  workDirection?: number | null
+  email?: string | null
+  telPhone?: string | null
+  chatAccount?: string | null
+  inviteCode?: string | null
+  createTime?: string | number
+}
+
+export interface AuthorProfileUpdateRequest {
+  /** 笔名必填（1-20 字） */
+  penName: string
+  workDirection?: number | null
+  email?: string | null
+  telPhone?: string | null
+  chatAccount?: string | null
+}
+
 /* ---------------- AI 创作流水线 ---------------- */
 
 /** 四档创作模式（后端 CreationMode） */

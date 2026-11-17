@@ -5,7 +5,7 @@
  */
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { BookOpen, Feather, Library, Search, LogOut } from 'lucide-vue-next'
+import { BookOpen, CircleUserRound, Feather, Library, Search, LogOut } from 'lucide-vue-next'
 import { DropdownMenu, DropdownItem, Button } from '@/components/ui'
 import { useAuth } from '@/composables/useAuth'
 import { cn } from '@/utils/cn'
@@ -74,6 +74,10 @@ const activeItem = computed(() => navItems.find((item) => item.match.test(route.
             <div class="px-2.5 py-1.5 text-xs text-ink-secondary">
               用户 {{ store.userId ?? '—' }}
             </div>
+            <DropdownItem @select="router.push('/profile')">
+              <CircleUserRound class="size-3.5" />
+              个人主页
+            </DropdownItem>
             <DropdownItem @select="router.push('/workbench')">
               <BookOpen class="size-3.5" />
               我的作品
