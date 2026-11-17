@@ -6,10 +6,13 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.linpj.novel.create.exception.BusinessException;
 import com.linpj.novel.create.exception.ErrorCode;
 import com.linpj.novel.create.exception.ThrowsUtils;
+import com.linpj.novel.create.context.UserStatusContext;
 import com.linpj.novel.create.mapper.novel.UserInfoMapper;
 import com.linpj.novel.create.pojo.dto.UserLoginRequest;
+import com.linpj.novel.create.pojo.dto.UserProfileUpdateRequest;
 import com.linpj.novel.create.pojo.dto.UserRegisterRequest;
 import com.linpj.novel.create.pojo.entity.UserInfo;
+import com.linpj.novel.create.pojo.vo.UserProfileVo;
 import com.linpj.novel.create.service.UserInfoService;
 import com.linpj.novel.create.utils.CommonHandle;
 import com.linpj.novel.create.utils.JwtUtils;
@@ -117,6 +120,10 @@ public class UserInfoServiceImpl extends ServiceImpl<UserInfoMapper, UserInfo>
         UserInfo user = new UserInfo();
         user.setUsername(account);
         user.setPassword(safePassword);
+        // PG 的 create_time NOT NULL 且显式 null 会覆盖列默认值，这里必须显式赋值
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        user.setCreateTime(now);
+        user.setUpdateTime(now);
         this.save(user);
         return user.getId();
     }
@@ -174,6 +181,59 @@ public class UserInfoServiceImpl extends ServiceImpl<UserInfoMapper, UserInfo>
         // 将当前 access_token 加入黑名单（可选使用 BloomFilter）
         String blacklistKey = "blacklist:access_token:" + accessToken;
         redisTemplate.opsForValue().set(blacklistKey, "revoked", 30, TimeUnit.MINUTES);
+    }
+
+    @Override
+    public UserProfileVo getCurrentUserProfile() {
+        UserInfo user = requireCurrentUser();
+        return toProfileVo(user);
+    }
+
+    @Override
+    public UserProfileVo updateUserProfile(UserProfileUpdateRequest request) {
+        ThrowsUtils.throwIf(CommonHandle.isNull(request), ErrorCode.PARAMS_ERROR);
+        UserInfo user = requireCurrentUser();
+
+        if (request.getNickName() != null) {
+            int nickLen = StringUtils.length(request.getNickName().trim());
+            ThrowsUtils.throwIf(nickLen < 1 || nickLen > 20, ErrorCode.PARAMS_ERROR, "昵称长度须为 1-20 字");
+            user.setNickName(request.getNickName().trim());
+        }
+        if (request.getUserSex() != null) {
+            ThrowsUtils.throwIf(request.getUserSex() != 0 && request.getUserSex() != 1,
+                    ErrorCode.PARAMS_ERROR, "性别取值仅支持 0-男 / 1-女");
+            user.setUserSex(request.getUserSex());
+        }
+
+        boolean updated = this.updateById(user);
+        ThrowsUtils.throwIf(!updated, ErrorCode.SYSTEM_ERROR, "资料更新失败");
+        return toProfileVo(this.getById(user.getId()));
+    }
+
+    /**
+     * 从登录态解析当前用户，未登录或用户不存在时抛错
+     */
+    private UserInfo requireCurrentUser() {
+        Long userId = UserStatusContext.getCurrentUserId();
+        ThrowsUtils.throwIf(userId == null, ErrorCode.NOT_LOGIN_ERROR, "请先登录");
+        UserInfo user = this.getById(userId);
+        ThrowsUtils.throwIf(user == null, ErrorCode.NOT_FOUND_ERROR, "用户不存在");
+        return user;
+    }
+
+    /**
+     * 实体转个人资料 VO（过滤密码等敏感字段）
+     */
+    private UserProfileVo toProfileVo(UserInfo user) {
+        UserProfileVo vo = new UserProfileVo();
+        vo.setId(user.getId());
+        vo.setUsername(user.getUsername());
+        vo.setNickName(user.getNickName());
+        vo.setUserPhoto(user.getUserPhoto());
+        vo.setUserSex(user.getUserSex());
+        vo.setAccountBalance(user.getAccountBalance());
+        vo.setCreateTime(user.getCreateTime());
+        return vo;
     }
 
 

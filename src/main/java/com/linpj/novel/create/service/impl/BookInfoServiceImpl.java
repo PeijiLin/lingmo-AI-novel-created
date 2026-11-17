@@ -22,13 +22,11 @@ import com.linpj.novel.create.pojo.entity.BookChapter;
 import com.linpj.novel.create.pojo.entity.BookContent;
 import com.linpj.novel.create.pojo.entity.BookInfo;
 import com.linpj.novel.create.pojo.entity.CreateBook;
-import com.linpj.novel.create.pojo.entity.UserInfo;
 import com.linpj.novel.create.pojo.vo.BookInfoListVo;
 import com.linpj.novel.create.service.AuthorInfoService;
 import com.linpj.novel.create.service.BookChapterService;
 import com.linpj.novel.create.service.BookContentService;
 import com.linpj.novel.create.service.BookInfoService;
-import com.linpj.novel.create.service.UserInfoService;
 import com.linpj.novel.create.utils.CommonHandle;
 import com.linpj.novel.create.utils.JsonUtil;
 import jakarta.annotation.Resource;
@@ -52,8 +50,6 @@ public class BookInfoServiceImpl extends ServiceImpl<BookInfoMapper, BookInfo>
 
     private final AuthorInfoService authorInfoService;
 
-    private final UserInfoService userInfoService;
-
     private final BookChapterService bookChapterService;
 
     private final BookContentService bookContentService;
@@ -63,12 +59,10 @@ public class BookInfoServiceImpl extends ServiceImpl<BookInfoMapper, BookInfo>
 
     public BookInfoServiceImpl(RedisTemplate<String, Object> redisTemplate,
                                AuthorInfoService authorInfoService,
-                               UserInfoService userInfoService,
                                BookChapterService bookChapterService,
                                BookContentService bookContentService) {
         this.redisTemplate = redisTemplate;
         this.authorInfoService = authorInfoService;
-        this.userInfoService = userInfoService;
         this.bookChapterService = bookChapterService;
         this.bookContentService = bookContentService;
     }
@@ -287,25 +281,10 @@ public class BookInfoServiceImpl extends ServiceImpl<BookInfoMapper, BookInfo>
     // ---------- 私有辅助 ----------
 
     /**
-     * 解析作者：按 userId 查 author_info；createIfAbsent 为 true 时不存在则自动创建作者档案。
+     * 解析作者：委托 AuthorInfoService 统一实现（无档案时按需创建）。
      */
     private AuthorInfo resolveAuthorInfo(Long userId, boolean createIfAbsent) {
-        AuthorInfo authorInfo = authorInfoService.getOne(
-                new LambdaQueryWrapper<AuthorInfo>().eq(AuthorInfo::getUserId, userId));
-        if (authorInfo == null && createIfAbsent) {
-            UserInfo userInfo = userInfoService.getById(userId);
-            authorInfo = new AuthorInfo();
-            authorInfo.setUserId(userId);
-            authorInfo.setPenName(userInfo != null && StringUtils.isNotBlank(userInfo.getUsername())
-                    ? userInfo.getUsername() : "作者" + userId);
-            authorInfo.setStatus(0);
-            java.util.Date now = new java.util.Date();
-            authorInfo.setCreateTime(now);
-            authorInfo.setUpdateTime(now);
-            boolean saved = authorInfoService.save(authorInfo);
-            ThrowsUtils.throwIf(!saved, ErrorCode.SYSTEM_ERROR, "作者创建失败");
-        }
-        return authorInfo;
+        return authorInfoService.resolveByUserId(userId, createIfAbsent);
     }
 
     /**

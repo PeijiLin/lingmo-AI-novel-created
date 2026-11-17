@@ -5,7 +5,9 @@ import com.linpj.novel.create.constant.ResultUtils;
 import com.linpj.novel.create.exception.ErrorCode;
 import com.linpj.novel.create.exception.ThrowsUtils;
 import com.linpj.novel.create.pojo.dto.UserLoginRequest;
+import com.linpj.novel.create.pojo.dto.UserProfileUpdateRequest;
 import com.linpj.novel.create.pojo.dto.UserRegisterRequest;
+import com.linpj.novel.create.pojo.vo.UserProfileVo;
 import com.linpj.novel.create.service.UserInfoService;
 import com.linpj.novel.create.utils.CommonHandle;
 import jakarta.annotation.Resource;
@@ -59,6 +61,26 @@ public class UserController {
     public BaseResponse<?> logout(@RequestHeader("Authorization") String authHeader) {
         userInfoService.logout(authHeader);
         return ResultUtils.success(null, "登出成功");
+    }
+
+    /**
+     * 当前登录用户资料（个人主页）
+     * @return 用户资料（不含密码）
+     */
+    @GetMapping("/me")
+    public BaseResponse<UserProfileVo> getCurrentUserProfile() {
+        return ResultUtils.success(userInfoService.getCurrentUserProfile());
+    }
+
+    /**
+     * 更新当前登录用户资料（昵称 / 性别）
+     * @param request 可空字段表示不变更
+     * @return 更新后资料
+     */
+    @PutMapping("/update")
+    public BaseResponse<UserProfileVo> updateUserProfile(@RequestBody UserProfileUpdateRequest request) {
+        ThrowsUtils.throwIf(CommonHandle.isNull(request), ErrorCode.PARAMS_ERROR);
+        return ResultUtils.success(userInfoService.updateUserProfile(request));
     }
 
 
