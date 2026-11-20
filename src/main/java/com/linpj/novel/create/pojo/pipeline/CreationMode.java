@@ -1,5 +1,8 @@
 package com.linpj.novel.create.pojo.pipeline;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonValue;
+
 /**
  * 创作模式（成本分级）
  *
@@ -14,5 +17,22 @@ public enum CreationMode {
     FAST,
     STANDARD,
     REFINED,
-    PRECISE
+    PRECISE;
+
+    /**
+     * 大小写兼容反序列化："fast" / "Fast" / "FAST" 均可（Jackson 默认枚举绑定大小写敏感，
+     * 前端传小写会直接 400）；空串视为未传（走默认 FAST），未知值显式抛错而非静默降级。
+     */
+    @JsonCreator
+    public static CreationMode fromValue(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return valueOf(value.trim().toUpperCase());
+    }
+
+    @JsonValue
+    public String toValue() {
+        return name();
+    }
 }

@@ -18,7 +18,7 @@ public class BookCategoryVo implements Serializable {
     private Integer workDirection;
 
     /**
-     * 名称
+     * 名称（对齐前端 categoryName）
      */
-    private String name;
+    private String categoryName;
 }

@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: 8088
   servlet:
     context-path: /api
     encoding:
@@ -38,12 +38,12 @@ spring:
     # 知识库：PGVector 向量库
     novel-knowledge:
       driver-class-name: org.postgresql.Driver
-      jdbc-url: jdbc:postgresql://192.168.0.106:5432/novel_knowledge_base
+      jdbc-url: jdbc:postgresql://192.168.220.138:5432/novel_knowledge_base
       username: postgres
-      password:
+      password: 123456
   data:
     redis:
-      host: 192.168.0.106
+      host: 192.168.220.138
       port: 6379
       password: 123456
       lettuce:
@@ -96,9 +96,9 @@ mybatis-plus:
       id-type: auto
 
 minio:
-  endpoint: http://192.168.0.105:9000
-  access-key: minioadmin
-  secret-key: minioadmin
+  endpoint: http://192.168.220.138:9000
+  access-key: admin
+  secret-key: admin123
   bucketFileName: student-management-system-file
 
 # JWT 认证配置（原硬编码密钥 hzy123 外部化）

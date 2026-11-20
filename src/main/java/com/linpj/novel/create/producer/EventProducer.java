@@ -26,10 +26,10 @@ public class EventProducer {
         if (file == null || file.isEmpty() || knowledgeBaseId == null || knowledgeBaseId <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "请求参数不能为空");
         }
-        // 将文件上传到对象存储服务器
+        // 将文件上传到对象存储服务器，消息体携带 URL（而非 MultipartFile 对象——Gson 无法序列化文件流）
         String url = fileUtil.upload(file);
         Map<String, Object> map = new HashMap<>();
-        map.put("file", file);
+        map.put("file", url);
         map.put("knowledgeBaseId", knowledgeBaseId);
         String json = JsonUtil.toJson(map);
         kafkaTemplate.send(topic, String.valueOf(knowledgeBaseId), json);

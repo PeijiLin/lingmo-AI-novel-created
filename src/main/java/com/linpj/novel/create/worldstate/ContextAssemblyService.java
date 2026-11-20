@@ -99,6 +99,7 @@ public class ContextAssemblyService {
         context.setUserInput(request.getUserInput());
         context.setCreationType(request.getCreationType());
         context.setStyle(request.getStyle());
+        trimToBudget(context);
         return context;
     }
 
@@ -118,6 +119,7 @@ public class ContextAssemblyService {
         context.setActivePlotThreads(plotThreadService.renderActiveThreads(request.getBookId()));
         context.setCreationType(request.getCreationType());
         context.setStyle(request.getStyle());
+        trimToBudget(context);
         return context;
     }
 
@@ -199,19 +201,70 @@ public class ContextAssemblyService {
             return;
         }
         // 2. story_digest 截断（保留最近的尾部）
-        if (notBlank(context.getStoryDigest()) && context.getStoryDigest().length() > DIGEST_TRUNCATE_KEEP) {
-            context.setStoryDigest("……" + context.getStoryDigest()
-                    .substring(context.getStoryDigest().length() - DIGEST_TRUNCATE_KEEP));
-            if (totalChars(context) <= CONTEXT_CHAR_BUDGET) {
-                return;
-            }
+        context.setStoryDigest(truncateDigest(context.getStoryDigest()));
+        if (totalChars(context) <= CONTEXT_CHAR_BUDGET) {
+            return;
         }
         // 3. 非出场角色：已在 loadCharacterInfo 按出场过滤，无可再裁（出场角色卡永不裁）
         // 4. 裁历史伏笔
         context.setActivePlotThreads(null);
     }
 
+    /** Critic 上下文预算：待审正文与大纲为审查基准永不裁，其余同优先级裁剪 */
+    private void trimToBudget(CriticContext context) {
+        if (totalChars(context) <= CONTEXT_CHAR_BUDGET) {
+            return;
+        }
+        context.setStyle(null);
+        if (totalChars(context) <= CONTEXT_CHAR_BUDGET) {
+            return;
+        }
+        context.setStoryDigest(truncateDigest(context.getStoryDigest()));
+        if (totalChars(context) <= CONTEXT_CHAR_BUDGET) {
+            return;
+        }
+        // 无大纲时角色卡为全量事实基准，不裁；裁历史伏笔
+        context.setActivePlotThreads(null);
+    }
+
+    /** Planner 上下文预算：角色列表是 characterIds 的选择基准永不裁 */
+    private void trimToBudget(PlannerContext context) {
+        if (totalChars(context) <= CONTEXT_CHAR_BUDGET) {
+            return;
+        }
+        context.setStyle(null);
+        if (totalChars(context) <= CONTEXT_CHAR_BUDGET) {
+            return;
+        }
+        context.setStoryDigest(truncateDigest(context.getStoryDigest()));
+        if (totalChars(context) <= CONTEXT_CHAR_BUDGET) {
+            return;
+        }
+        // 裁历史伏笔（角色列表为选择基准，永不裁）
+        context.setActivePlotThreads(null);
+    }
+
+    /** story_digest 截断（保留最近尾部；已短于保留长度时不变） */
+    private static String truncateDigest(String digest) {
+        if (digest == null || digest.length() <= DIGEST_TRUNCATE_KEEP) {
+            return digest;
+        }
+        return "……" + digest.substring(digest.length() - DIGEST_TRUNCATE_KEEP);
+    }
+
     private int totalChars(WriterContext context) {
+        return len(context.getWorldSetting()) + len(context.getCharacterInfo())
+                + len(context.getStoryDigest()) + len(context.getActivePlotThreads())
+                + len(context.getStyle()) + len(context.getUserInput());
+    }
+
+    private int totalChars(CriticContext context) {
+        return len(context.getWorldSetting()) + len(context.getCharacterInfo())
+                + len(context.getStoryDigest()) + len(context.getActivePlotThreads())
+                + len(context.getStyle()) + len(context.getUserInput()) + len(context.getDraft());
+    }
+
+    private int totalChars(PlannerContext context) {
         return len(context.getWorldSetting()) + len(context.getCharacterInfo())
                 + len(context.getStoryDigest()) + len(context.getActivePlotThreads())
                 + len(context.getStyle()) + len(context.getUserInput());

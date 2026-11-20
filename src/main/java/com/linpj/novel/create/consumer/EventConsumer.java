@@ -1,11 +1,8 @@
 package com.linpj.novel.create.consumer;
 
 import com.google.gson.reflect.TypeToken;
-import com.linpj.novel.create.exception.ErrorCode;
-import com.linpj.novel.create.exception.ThrowsUtils;
 import com.linpj.novel.create.pojo.entity.KnowledgeBase;
 import com.linpj.novel.create.service.KnowledgeBaseService;
-import com.linpj.novel.create.service.impl.CustomizeKnowledgeBaseServiceImpl;
 import com.linpj.novel.create.utils.FileUtil;
 import com.linpj.novel.create.utils.JsonUtil;
 import org.slf4j.Logger;
@@ -17,7 +14,6 @@ import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
-import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -29,6 +25,11 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 /**
+ * 知识库文档上传消费者（document-upload）
+ *
+ * 批量消费 + 手动确认模式（与 application.yml 的 listener.type: batch 对齐）。
+ * 单条消息处理失败不阻塞批次：记录日志后继续，避免毒消息卡死队列。
+ *
  * @author HL
  */
 @Component
@@ -36,7 +37,7 @@ public class EventConsumer {
 
     private final FileUtil fileUtil;
 
-    private static final Logger logger = LoggerFactory.getLogger(CustomizeKnowledgeBaseServiceImpl.class);
+    private static final Logger logger = LoggerFactory.getLogger(EventConsumer.class);
 
     private final PgVectorStore pgVectorStore;
 
@@ -52,29 +53,54 @@ public class EventConsumer {
         this.tokenTextSplitter = new TokenTextSplitter();
     }
 
+    /**
+     * 批量消费签名（List 签名是 batch 容器的硬性要求，单条签名会在运行时抛异常）
+     */
     @KafkaListener(topics = {"document-upload"}, groupId = "adminGroup", concurrency = "5")
-    public void onEvent(String event, Acknowledgment ack) {
+    public void onEvent(List<String> events, Acknowledgment ack) {
+        for (String event : events) {
+            try {
+                processEvent(event);
+            } catch (Exception e) {
+                // 单条失败不阻塞批次；失败消息不做重投（避免毒消息反复消费），由日志与业务侧补偿
+                logger.error("文档上传事件处理失败: {}", event, e);
+            }
+        }
+        ack.acknowledge();
+    }
+
+    private void processEvent(String event) {
         Type type = new TypeToken<Map<String, Object>>() {
         }.getType();
         Map<String, Object> map = JsonUtil.fromJson(event, type);
-        String fileUrl = (String) map.get("file");
-        long knowledgeBaseId = (long) map.get("knowledgeId");
-        File tempFile = null;
+        // 生产者写入的字段是 file（MinIO URL 字符串）与 knowledgeBaseId（数字）
+        Object fileUrlObj = map.get("file");
+        Object knowledgeIdObj = map.get("knowledgeBaseId");
+        if (!(fileUrlObj instanceof String fileUrl) || !(knowledgeIdObj instanceof Number knowledgeId)) {
+            logger.warn("文档上传事件缺少 file/knowledgeBaseId 字段或类型不符，跳过: {}", event);
+            return;
+        }
+        long knowledgeBaseId = knowledgeId.longValue();
+
         Map<String, String> params = fileUtil.generateParams(fileUrl);
         String objectName = params.get("objectName");
 
-        //解析文件
+        // 解析文件
+        File tempFile = null;
         try {
             tempFile = File.createTempFile("upload_", "_" + objectName);
-            InputStream inputStream = fileUtil.downloadByUrlAsStream(fileUrl);
-            List<Document> documentList = getDocuments(inputStream, tempFile, knowledgeBaseId, objectName);
+            List<Document> documentList;
+            try (InputStream inputStream = fileUtil.downloadByUrlAsStream(fileUrl)) {
+                documentList = getDocuments(inputStream, tempFile, knowledgeBaseId, objectName);
+            }
             logger.info("{} documents loaded and split from uploaded file", documentList.size());
             dataInsert(knowledgeBaseId, documentList, documentList.stream());
-            ack.acknowledge();
         } catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
-            tempFile.deleteOnExit();
+            if (tempFile != null) {
+                tempFile.deleteOnExit();
+            }
         }
     }
 
@@ -85,12 +111,12 @@ public class EventConsumer {
         knowledgeBase.setId(knowledgeBaseId);
         knowledgeBase.setDocumentIds(list);
         boolean b = knowledgeBaseService.updateById(knowledgeBase);
-        ThrowsUtils.throwIf(!b, ErrorCode.SYSTEM_ERROR);
+        if (!b) {
+            logger.error("知识库 documentIds 回写失败: knowledgeBaseId={}", knowledgeBaseId);
+        }
     }
 
     private List<Document> getDocuments(InputStream inputStream, File tempFile, Long knowledgeBaseId, String originalFilename) throws IOException {
-        tempFile.deleteOnExit();
-
         // 将输入流内容写入临时文件
         try (FileOutputStream outputStream = new FileOutputStream(tempFile)) {
             byte[] buffer = new byte[4096];

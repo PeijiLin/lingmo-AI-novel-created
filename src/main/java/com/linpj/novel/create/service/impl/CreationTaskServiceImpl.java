@@ -66,11 +66,11 @@ public class CreationTaskServiceImpl extends ServiceImpl<CreationTaskMapper, Cre
     }
 
     @Override
-    public void failTask(Long taskId, String currentStage, String error) {
+    public void failTask(Long taskId, String error) {
         CreationTask task = new CreationTask();
         task.setId(taskId);
         task.setStatus("FAILED");
-        task.setCurrentStage(currentStage);
+        // current_stage 不赋值：updateById 按 null 跳过，保留最后推进阶段供断点续跑
         task.setError(truncate(error));
         updateById(task);
     }

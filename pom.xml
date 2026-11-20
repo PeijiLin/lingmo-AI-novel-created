@@ -31,7 +31,12 @@
     <properties>
         <java.version>17</java.version>
         <spring-boot.version>3.4.5</spring-boot.version>
+        <!-- 源码编码：中文 Windows 下 mvn 默认 GBK 读取源码会导致中文注释/字符串编译失败（IDEA 默认 UTF-8 故此前未暴露） -->
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <mybatis-plus.version>3.5.14</mybatis-plus.version>
+        <!-- 已知问题：knife4j 4.5.0 与 Boot 3.4.5（spring-web 6.2）二进制不兼容（ControllerAdviceBean
+             NoSuchMethodError → /v3/api-docs 500）。暂无适配版本，等 knife4j 发布适配 Boot 3.4 的新版后升级 -->
         <knife4j.version>4.5.0</knife4j.version>
         <hutool.version>5.8.16</hutool.version>
         <bcrypt.version>0.10.2</bcrypt.version>

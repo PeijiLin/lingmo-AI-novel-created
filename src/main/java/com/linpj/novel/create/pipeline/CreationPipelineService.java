@@ -180,7 +180,7 @@ public class CreationPipelineService {
         } catch (Exception e) {
             log.error("管道执行失败: taskId={}, mode={}", taskId, request.getMode(), e);
             emitter.emitStage(StageEvent.failed(e.getMessage()));
-            creationTaskService.failTask(taskId, null, e.getMessage());
+            creationTaskService.failTask(taskId, e.getMessage());
         } finally {
             emitter.complete();
         }
@@ -219,20 +219,18 @@ public class CreationPipelineService {
 
     private boolean runRefined(PipelineRequest request, Long taskId, ProgressEmitter emitter, StageUsage usage) {
         final int total = 4; // PLANNING + WRITING + CRITIC + POLISHING
-        boolean degraded = false;
 
         // —— Planner（序号 1）——
         PlanOutcome plan = runPlanning(request, taskId, emitter, usage, total);
-        degraded = degraded || plan.degraded();
 
         // —— Writer -> Critic 闭环（Writer 序号 2，Critic 序号 3）——
         DraftOutcome outcome = runWriterCriticLoop(request, taskId, emitter, usage, plan.outline(), 2, total);
-        degraded = degraded || outcome.degraded();
 
         // —— 伏笔记账 + Polisher（序号 4）——
         settleLedger(request, plan.outline(), outcome.draft());
-        degraded = degraded || runPolishing(request, taskId, emitter, usage, plan.outline(), outcome.draft());
-        return degraded;
+        // 先求值再或：|| 短路会跳过 Polisher（Planner 降级时正文已写出，润色仍需执行）
+        boolean polishDegraded = runPolishing(request, taskId, emitter, usage, plan.outline(), outcome.draft());
+        return plan.degraded() || outcome.degraded() || polishDegraded;
     }
 
     // ------------------------------------------------------------------
@@ -266,9 +264,11 @@ public class CreationPipelineService {
             resultA = drafts.getT1();
             resultB = drafts.getT2();
         } catch (Exception e) {
-            // 双稿并行失败：降级为单稿（标准稿重试机制走 writeWithRetry）
+            // 双稿并行失败：降级为单稿（标准稿重试机制走 writeWithRetry）。
+            // 失败前标准稿可能已流式外发部分内容：先 REVISION 重置客户端内容缓冲再走单稿，避免拼接污染
             log.warn("并行双稿失败，降级为单稿: {}", e.getMessage());
             degraded = true;
+            emitter.emitStage(StageEvent.revision(StageCode.WRITING, 1));
             WriterAgent.WriteResult single = writeWithRetry(writerContext, emitter, null, null);
             resultA = single;
             resultB = null;
@@ -306,12 +306,12 @@ public class CreationPipelineService {
         // —— 择优后照常进入重写回路（最优稿仍有 HIGH 问题时）——
         DraftOutcome outcome = rewriteLoop(request, taskId, emitter, usage, plan.outline(),
                 writerContext, selectedDraft, selectedReview.report(), 2, total);
-        degraded = degraded || outcome.degraded();
 
         // —— 伏笔记账 + Polisher（序号 4）——
         settleLedger(request, plan.outline(), outcome.draft());
-        degraded = degraded || runPolishing(request, taskId, emitter, usage, plan.outline(), outcome.draft());
-        return degraded;
+        // 先求值再或：|| 短路会跳过 Polisher（Planner/双稿降级时正文已写出，润色仍需执行）
+        boolean polishDegraded = runPolishing(request, taskId, emitter, usage, plan.outline(), outcome.draft());
+        return degraded || outcome.degraded() || polishDegraded;
     }
 
     private static int scoreOf(ReviewReport report) {
@@ -322,7 +322,7 @@ public class CreationPipelineService {
     // 可复用阶段
     // ------------------------------------------------------------------
 
-    /** Planner 阶段（失败降级：跳过大纲，Writer 直接吃用户输入，管道不中断） */
+    /** Planner 阶段（失败/空产物降级：跳过大纲，Writer 直接吃用户输入，管道不中断） */
     private PlanOutcome runPlanning(PipelineRequest request, Long taskId, ProgressEmitter emitter,
                                     StageUsage usage, int total) {
         emitter.emitStage(StageEvent.started(StageCode.PLANNING, 1, total));
@@ -331,12 +331,15 @@ public class CreationPipelineService {
             PlannerContext plannerContext = contextAssemblyService.assemblePlannerContext(request);
             PlannerAgent.PlanResult planResult = plannerAgent.plan(plannerContext);
             ChapterOutline outline = planResult.outline();
-            if (outline != null) {
-                outlineStoreService.saveOutline(request.getBookId(), request.getChapterId(), outline);
-            }
-            saveArtifact(taskId, StageCode.PLANNING, 1, outline, planResult.tokens());
             usage.addTokens(planResult.tokens());
             usage.setStages(usage.getStages() + 1);
+            if (outline == null) {
+                // 结构化解析返回空（未抛异常）：等同 Planner 降级，Writer 直接消费用户输入
+                log.warn("Planner 返回空大纲，降级为直接续写: bookId={}", request.getBookId());
+                return new PlanOutcome(null, true);
+            }
+            outlineStoreService.saveOutline(request.getBookId(), request.getChapterId(), outline);
+            saveArtifact(taskId, StageCode.PLANNING, 1, outline, planResult.tokens());
             return new PlanOutcome(outline, false);
         } catch (Exception e) {
             log.warn("Planner 失败，降级为直接续写: {}", e.getMessage());
@@ -344,14 +347,20 @@ public class CreationPipelineService {
         }
     }
 
-    /** Polisher 阶段（情节不动硬约束 + Critic 复核；复核不过则回退原稿） */
+    /**
+     * Polisher 阶段（情节不动硬约束 + Critic 复核；复核不过则回退原稿）。
+     *
+     * 润色内容先缓冲不外发：复核通过才下发，复核不过以 REVISION(POLISHING) 事件重置客户端缓冲并补发原稿
+     * ——保证客户端看到的终稿与服务端采纳的终稿一致（否则复核失败的润色稿会残留在前端缓冲里被保存）。
+     */
     private boolean runPolishing(PipelineRequest request, Long taskId, ProgressEmitter emitter,
                                  StageUsage usage, ChapterOutline outline, String draft) {
         emitter.emitStage(StageEvent.started(StageCode.POLISHING, 4, 4));
         creationTaskService.advanceStage(taskId, StageCode.POLISHING.name());
         try {
+            StringBuilder polishBuffer = new StringBuilder();
             PolisherAgent.PolishResult polishResult =
-                    polisherAgent.polish(draft, request.getStyle(), emitter::emitContent);
+                    polisherAgent.polish(draft, request.getStyle(), polishBuffer::append);
             saveArtifact(taskId, StageCode.POLISHING, 1, Map.of("text", polishResult.text()), polishResult.tokens());
             usage.addTokens(polishResult.tokens());
             usage.setStages(usage.getStages() + 1);
@@ -364,11 +373,19 @@ public class CreationPipelineService {
             usage.setStages(usage.getStages() + 1);
             if (!verify.report().isApproved()) {
                 log.warn("Polisher 复核未通过，回退润色前原稿: {}", verify.report().getSummary());
+                // 回退：重置客户端内容缓冲后补发原稿（与 REFINED/PRECISE 择优回退同一协议语义）
+                emitter.emitStage(StageEvent.revision(StageCode.POLISHING, 1));
+                emitter.emitContent(draft);
                 return true;
             }
+            // 复核通过：REVISION(POLISHING) 重置客户端缓冲（抹去 Writer 原稿）后下发润色终稿，
+            // 避免原稿与终稿在 content 流中拼接重复
+            emitter.emitStage(StageEvent.revision(StageCode.POLISHING, 1));
+            emitter.emitContent(polishResult.text());
             return false;
         } catch (Exception e) {
             log.warn("Polisher 失败，降级采用原稿: {}", e.getMessage());
+            // 润色内容未外发过，客户端缓冲仍是 Writer 终稿，无需回退信号
             return true;
         }
     }
@@ -464,7 +481,10 @@ public class CreationPipelineService {
     // ------------------------------------------------------------------
 
     /**
-     * Writer 执行：失败重试 1 次；再失败则管道失败（设计 4.4）
+     * Writer 执行：失败重试 1 次；再失败则管道失败（设计 4.4）。
+     *
+     * 首次尝试正常流式外发；重试尝试改为缓冲后一次性下发
+     * ——失败尝试已外发的部分内容会污染客户端缓冲，重试成功后必须以 REVISION 事件重置再发完整产出。
      *
      * @param review 重写轮次携带的问题清单；null 表示首轮写作
      * @param draft  待修订原稿；首轮写作时为 null
@@ -473,11 +493,22 @@ public class CreationPipelineService {
                                                     ReviewReport review, String draft) {
         int attempt = 0;
         while (true) {
+            final boolean isRetry = attempt > 0;
+            StringBuilder retryBuffer = isRetry ? new StringBuilder() : null;
+            java.util.function.Consumer<String> sink = isRetry ? retryBuffer::append : emitter::emitContent;
             try {
+                WriterAgent.WriteResult result;
                 if (review == null) {
-                    return writerAgent.write(context, emitter::emitContent);
+                    result = writerAgent.write(context, sink);
+                } else {
+                    result = writerAgent.rewrite(context, draft, review, attempt + 1, sink);
                 }
-                return writerAgent.rewrite(context, draft, review, attempt + 1, emitter::emitContent);
+                if (isRetry) {
+                    // 重试成功：REVISION 事件重置客户端缓冲（抹去失败尝试的部分内容）后下发完整产出
+                    emitter.emitStage(StageEvent.revision(StageCode.WRITING, attempt + 1));
+                    emitter.emitContent(result.text());
+                }
+                return result;
             } catch (Exception e) {
                 attempt++;
                 if (attempt > 1) {
@@ -529,6 +560,11 @@ public class CreationPipelineService {
 
     /** 阶段产物实时落库（异常中断后产物仍在，支持基于 last artifact 续跑——阶段三接口预留） */
     private void saveArtifact(Long taskId, StageCode stage, int round, Object artifact, long tokens) {
+        if (artifact == null) {
+            // artifact 列为 JSONB NOT NULL：空产物直接跳过，避免约束违反导致的无效落库
+            log.debug("阶段产物为空，跳过落库: taskId={}, stage={}, round={}", taskId, stage, round);
+            return;
+        }
         try {
             CreationStageArtifact record = new CreationStageArtifact();
             record.setTaskId(taskId);

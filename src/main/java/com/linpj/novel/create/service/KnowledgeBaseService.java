@@ -3,6 +3,7 @@ package com.linpj.novel.create.service;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.linpj.novel.create.pojo.common.PageRequest;
 import com.linpj.novel.create.pojo.dto.KnowledgeBaseDto;
+import com.linpj.novel.create.pojo.dto.KnowledgeBasePageRequest;
 import com.linpj.novel.create.pojo.entity.KnowledgeBase;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.linpj.novel.create.pojo.vo.KnowledgeBaseVo;
@@ -17,5 +18,5 @@ public interface KnowledgeBaseService extends IService<KnowledgeBase> {
 
     Long addKnowledgeBase(KnowledgeBaseDto knowledgeBaseDto);
 
-    Page<KnowledgeBaseVo> pageKnowledgeBase(PageRequest pageRequest);
+    Page<KnowledgeBaseVo> pageKnowledgeBase(KnowledgeBasePageRequest pageRequest);
 }

@@ -85,7 +85,11 @@ public class CreateBookServiceImpl extends ServiceImpl<CreateBookMapper, CreateB
 
         Long authorId = createBookAddRequest.getAuthorId();
         if (authorId == null || authorId <= 0) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+            // 章节属于书，作者继承书作者（前端新增章节不传 authorId）
+            authorId = bookInfo.getAuthorId();
+        }
+        if (authorId == null || authorId <= 0) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "作者不存在");
         }
         CreateBook createBook = new CreateBook();
 
@@ -107,8 +111,10 @@ public class CreateBookServiceImpl extends ServiceImpl<CreateBookMapper, CreateB
                 event.setBookId(createBook.getBookId());
                 event.setChapterId(createBook.getId());
                 event.setTitle(createBook.getTitle());
+                // content 非 String（JSONB 反序列化为 Map/List 等）时序列化为 JSON 文本，
+                // 避免 String.valueOf 产生对象 toString 噪声进定稿事件
                 event.setContent(createBook.getContent() instanceof String s
-                        ? s : String.valueOf(createBook.getContent()));
+                        ? s : JsonUtil.toJson(createBook.getContent()));
                 creationEventProducer.sendChapterFinalized(event);
             } catch (Exception e) {
                 // 定稿结算失败不影响章节保存（下次保存会重发）

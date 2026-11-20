@@ -26,7 +26,9 @@ import static org.springframework.ai.chat.memory.ChatMemory.CONVERSATION_ID;
 /**
  * 主笔 Agent：按（可选）大纲流式写正文
  *
- * - 记忆隔离：conversationId 使用 "writer:{chapterId}"，与现有 FAST 链路（裸 chapterId）隔离
+ * - 记忆隔离：首写/变体 conversationId 使用 "writer:{chapterId}"，与现有 FAST 链路（裸 chapterId）隔离；
+ *   重写轮次使用 "writer:{chapterId}:rw{n}" 独立会话——避免多轮重写把"全量原稿+问题清单"
+ *   反复写入同一会话挤占记忆窗口（窗口默认 20 条），也避免旧稿干扰定向修订
  * - 重写为定向修订：带原稿 + Critic 问题清单逐场景比对修改，非从零生成
  * - 大纲场景拆进 user prompt 而非 system（降低"流式生成不听话"风险）
  * - 伏笔内联标记：正文若出现大纲外新伏笔，以 <!--plot: 伏笔描述--> 输出（编排器剥离入账）
@@ -75,16 +77,19 @@ public class WriterAgent {
             userPrompt = userPrompt + "\n\n【变体要求】在严格保持大纲冲突与场景顺序不变的前提下，"
                     + "用更具张力、节奏更锐利的叙事处理完成本章，敢于留白与场景跳跃，避免平铺直叙。";
         }
-        return doWrite(context, systemPrompt, userPrompt, onChunk, variant);
+        return doWrite(context, systemPrompt, userPrompt, onChunk, variant, conversationId(context));
     }
 
     /**
-     * 定向重写：附原稿与问题清单，只针对 HIGH/MEDIUM 问题修订，保持未受影响段落与文风
+     * 定向重写：附原稿与问题清单，只针对 HIGH/MEDIUM 问题修订，保持未受影响段落与文风。
+     * 记忆独立会话（:rw{round} 后缀）：重写 prompt 已携带全量原稿与问题清单，
+     * 无需依赖首写会话记忆，且避免旧稿残留对定向修订的干扰。
      */
     public WriteResult rewrite(WriterContext context, String draft, ReviewReport review, int round, Consumer<String> onChunk) {
         String systemPrompt = buildSystemPrompt(context);
         String userPrompt = buildRewritePrompt(context, draft, review, round);
-        return doWrite(context, systemPrompt, userPrompt, onChunk, 1);
+        String memoryKey = conversationId(context) + ":rw" + Math.max(1, round);
+        return doWrite(context, systemPrompt, userPrompt, onChunk, 1, memoryKey);
     }
 
     // ------------------------------------------------------------------
@@ -92,14 +97,14 @@ public class WriterAgent {
     // ------------------------------------------------------------------
 
     private WriteResult doWrite(WriterContext context, String systemPrompt, String userPrompt,
-                                 Consumer<String> onChunk, int variant) {
+                                 Consumer<String> onChunk, int variant, String memoryKey) {
         StringBuilder aggregated = new StringBuilder();
         AtomicLong tokens = new AtomicLong();
 
         ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
                 .system(systemPrompt)
                 .user(userPrompt)
-                .advisors(a -> a.param(CONVERSATION_ID, conversationId(context)));
+                .advisors(a -> a.param(CONVERSATION_ID, memoryKey));
         // 变体稿提升温度，拉开双稿差异（避开趋同导致择优失去意义）
         if (variant > 1) {
             spec.options(OpenAiChatOptions.builder().temperature(0.9).build());
@@ -160,7 +165,9 @@ public class WriterAgent {
         prompt.append("1. 人物言行必须严格符合其角色卡与当前状态。\n");
         prompt.append("2. 不得使用角色当前尚不知道的信息（防剧透泄漏）。\n");
         prompt.append("3. 若提供了本章大纲，严格按场景顺序写作。\n");
-        prompt.append("4. 若正文出现大纲之外的新伏笔，在该处立即以 <!--plot: 伏笔简述--> 格式内联标记，便于编辑记账。\n\n");
+        prompt.append("4. 若正文出现大纲之外的新伏笔，在该处立即以 <!--plot: 伏笔简述--> 格式内联标记，便于编辑记账。\n");
+        prompt.append("5. 必须直接输出正文本身；不得输出任何解释、拒绝、免责声明、元信息、标题或条列说明"
+                + "（包括\"抱歉\"\"我无法\"\"请提供\"等拒答表述一律禁止）。\n\n");
 
         appendCreationTask(prompt, context.getCreationType());
         return prompt.toString();

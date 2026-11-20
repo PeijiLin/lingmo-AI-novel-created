@@ -22,8 +22,10 @@ public interface CreationTaskService extends IService<CreationTask> {
     /** 任务完成（含降级标记与用量统计） */
     void completeTask(Long taskId, boolean degraded, Integer totalTokens, Long elapsedMs);
 
-    /** 任务失败 */
-    void failTask(Long taskId, String currentStage, String error);
+    /**
+     * 任务失败（不改动 current_stage：保留最后推进到的阶段，供断点续跑定位）
+     */
+    void failTask(Long taskId, String error);
 
     /** 推进当前阶段（断点续跑预留） */
     void advanceStage(Long taskId, String currentStage);

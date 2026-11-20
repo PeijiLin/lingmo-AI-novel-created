@@ -41,7 +41,7 @@ public class BookCategoryServiceImpl extends ServiceImpl<BookCategoryMapper, Boo
             BookCategoryVo vo = new BookCategoryVo();
             vo.setId(category.getId());
             vo.setWorkDirection(category.getWorkDirection());
-            vo.setName(category.getName());
+            vo.setCategoryName(category.getName());
             return vo;
         }).toList();
         Map<Integer, List<BookCategoryVo>> collect = list.stream().collect(Collectors.groupingBy(BookCategoryVo::getWorkDirection));

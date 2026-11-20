@@ -1,11 +1,7 @@
 package com.linpj.novel.create.agent;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -56,18 +52,18 @@ public class PolisherAgent {
                 .stream()
                 .chatResponse()
                 .doOnNext(response -> {
-                    String chunk = extractText(response);
+                    String chunk = WriterAgent.extractText(response);
                     if (chunk != null && !chunk.isEmpty()) {
                         aggregated.append(chunk);
                         if (onChunk != null) {
                             onChunk.accept(chunk);
                         }
                     }
-                    captureUsage(response, tokens);
+                    WriterAgent.captureUsage(response, tokens);
                 })
                 .blockLast(POLISH_TIMEOUT);
 
-        long totalTokens = tokens.get() > 0 ? tokens.get() : estimateTokens(aggregated.toString());
+        long totalTokens = tokens.get() > 0 ? tokens.get() : WriterAgent.estimateTokens(aggregated.toString());
         return new PolishResult(aggregated.toString(), totalTokens);
     }
 
@@ -92,34 +88,5 @@ public class PolisherAgent {
 
     private String buildUserPrompt(String draft) {
         return "【待润色正文】\n" + draft;
-    }
-
-    // ------------------------------------------------------------------
-    // 与 WriterAgent 一致的响应处理工具
-    // ------------------------------------------------------------------
-
-    static String extractText(ChatResponse response) {
-        if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
-            return null;
-        }
-        AssistantMessage output = response.getResult().getOutput();
-        return output.getText();
-    }
-
-    static void captureUsage(ChatResponse response, AtomicLong tokens) {
-        if (response == null || response.getMetadata() == null) {
-            return;
-        }
-        Usage usage = response.getMetadata().getUsage();
-        if (usage != null && usage.getTotalTokens() != null && usage.getTotalTokens() > 0) {
-            tokens.set(usage.getTotalTokens());
-        }
-    }
-
-    static long estimateTokens(String text) {
-        if (text == null || text.isEmpty()) {
-            return 0;
-        }
-        return text.length();
     }
 }

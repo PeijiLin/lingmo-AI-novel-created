@@ -9,8 +9,8 @@ import com.linpj.novel.create.exception.BusinessException;
 import com.linpj.novel.create.exception.ErrorCode;
 import com.linpj.novel.create.exception.ThrowsUtils;
 import com.linpj.novel.create.mapper.knowledge.KnowledgeBaseMapper;
-import com.linpj.novel.create.pojo.common.PageRequest;
 import com.linpj.novel.create.pojo.dto.KnowledgeBaseDto;
+import com.linpj.novel.create.pojo.dto.KnowledgeBasePageRequest;
 import com.linpj.novel.create.pojo.entity.KnowledgeBase;
 import com.linpj.novel.create.pojo.vo.KnowledgeBaseVo;
 import com.linpj.novel.create.service.KnowledgeBaseService;
@@ -154,13 +154,19 @@ public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, K
     }
 
     @Override
-    public Page<KnowledgeBaseVo> pageKnowledgeBase(PageRequest pageRequest) {
+    public Page<KnowledgeBaseVo> pageKnowledgeBase(KnowledgeBasePageRequest pageRequest) {
         Long currentUserId = UserStatusContext.getCurrentUserId();
         if (currentUserId == null) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
         }
+        LambdaQueryWrapper<KnowledgeBase> wrapper = new LambdaQueryWrapper<KnowledgeBase>()
+                .eq(KnowledgeBase::getUserId, currentUserId);
+        // 支持按 bookId 过滤（前端知识库详情按书取库）
+        if (pageRequest.getBookId() != null && pageRequest.getBookId() > 0) {
+            wrapper.eq(KnowledgeBase::getBookId, pageRequest.getBookId());
+        }
         Page<KnowledgeBase> knowledgeBasePage = new Page<>(pageRequest.getPageNum(), pageRequest.getPageSize());
-        knowledgeBasePage = this.page(knowledgeBasePage, new LambdaQueryWrapper<KnowledgeBase>().eq(KnowledgeBase::getUserId, currentUserId));
+        knowledgeBasePage = this.page(knowledgeBasePage, wrapper);
         if (knowledgeBasePage.getRecords() == null || knowledgeBasePage.getRecords().isEmpty()) {
             return new Page<>();
         }
