@@ -17,6 +17,12 @@ import com.linpj.novel.create.pojo.pipeline.Scene;
 import com.linpj.novel.create.pojo.pipeline.StageEvent;
 import com.linpj.novel.create.pojo.pipeline.WriterContext;
 import com.linpj.novel.create.producer.CreationEventProducer;
+import com.linpj.novel.create.rule.RuleCheckContext;
+import com.linpj.novel.create.rule.RuleCheckResult;
+import com.linpj.novel.create.rule.RuleChecker;
+import com.linpj.novel.create.rule.RuleSeverity;
+import com.linpj.novel.create.rule.RuleStage;
+import com.linpj.novel.create.rule.RuleViolation;
 import com.linpj.novel.create.service.ChapterOutlineStoreService;
 import com.linpj.novel.create.service.CreationTaskService;
 import com.linpj.novel.create.service.PlotThreadService;
@@ -77,15 +83,18 @@ class CreationPipelineServiceTest {
     @Mock private PlotThreadService plotThreadService;
     @Mock private ChapterOutlineStoreService outlineStoreService;
     @Mock private CreationEventProducer creationEventProducer;
+    @Mock private RuleChecker ruleChecker;
 
     private CreationPipelineService service;
+    private final com.linpj.novel.create.config.PipelineFeatures pipelineFeatures =
+            new com.linpj.novel.create.config.PipelineFeatures();
 
     @BeforeEach
     void setUp() {
         service = new CreationPipelineService(writerAgent, criticAgent, plannerAgent,
                 polisherAgent, creationTaskService, artifactMapper, contextAssemblyService,
                 plotThreadService, outlineStoreService, creationEventProducer,
-                new com.linpj.novel.create.config.PipelineFeatures());
+                pipelineFeatures, ruleChecker);
     }
 
     // ------------------------------------------------------------------
@@ -230,6 +239,100 @@ class CreationPipelineServiceTest {
         verify(writerAgent, times(1)).rewrite(any(), eq("d1"), any(), eq(1), any());
         verify(criticAgent, times(2)).review(any());
         verify(creationTaskService).completeTask(eq(3L), eq(false), anyInt(), anyLong());
+    }
+
+    // ------------------------------------------------------------------
+    // N5 规则校验接入（v2.0 M1-B3，ruleRouting 总闸门控）
+    // ------------------------------------------------------------------
+
+    /** TC-32：ruleRouting 默认关闭（请求不带覆盖）= 主线行为，规则校验器零调用 */
+    @Test
+    void ruleRoutingOffKeepsBaselineBehavior() {
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+
+        service.runAsync(21L, request(CreationMode.STANDARD));
+
+        verify(ruleChecker, never()).check(any());
+        verify(writerAgent, times(1)).write(any(), any());
+        verify(creationTaskService).completeTask(eq(21L), eq(false), anyInt(), anyLong());
+    }
+
+    /** 开关开启 + ACTIVE 规则 HIGH 违规：即使 Critic 通过也强制重写（P6：硬校验不让位） */
+    @Test
+    void ruleRoutingOnBlockingHighForcesRewrite() {
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(writerAgent.rewrite(any(), eq("d1"), any(), eq(1), any()))
+                .thenReturn(new WriterAgent.WriteResult("d2", 120L));
+        // Critic 两次都直判通过：重写完全由规则驱动
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(ruleChecker.check(any()))
+                .thenReturn(ruleResult(withBlocking("RC-01", RuleSeverity.HIGH)))
+                .thenReturn(ruleResult(null));
+
+        PipelineRequest req = request(CreationMode.STANDARD);
+        req.setFeatures(Map.of("ruleRouting", true));
+        service.runAsync(22L, req);
+
+        verify(ruleChecker, times(2)).check(any());
+        verify(writerAgent, times(1)).rewrite(any(), eq("d1"), any(), eq(1), any());
+        // 第二轮规则通过 + Critic 通过 -> 不降级出章
+        verify(creationTaskService).completeTask(eq(22L), eq(false), anyInt(), anyLong());
+    }
+
+    /** 影子态规则违规：只记录不阻塞（分级上线观测语义） */
+    @Test
+    void ruleRoutingOnShadowViolationDoesNotBlock() {
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        RuleCheckResult shadowResult = ruleResult(null);
+        shadowResult.addShadow(RuleViolation.of("RC-12", RuleSeverity.MEDIUM, RuleStage.DRAFT,
+                "叙述层出现第一人称标记", "检查叙述视角", true));
+        when(ruleChecker.check(any())).thenReturn(shadowResult);
+
+        PipelineRequest req = request(CreationMode.STANDARD);
+        req.setFeatures(Map.of("ruleRouting", true));
+        service.runAsync(23L, req);
+
+        verify(ruleChecker, times(1)).check(any());
+        verify(writerAgent, never()).rewrite(any(), anyString(), any(), anyInt(), any());
+        verify(creationTaskService).completeTask(eq(23L), eq(false), anyInt(), anyLong());
+    }
+
+    /** 规则通道整体故障：降级跳过（管道照常出章） */
+    @Test
+    void ruleCheckerFailureDoesNotBreakPipeline() {
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(ruleChecker.check(any())).thenThrow(new IllegalStateException("规则引擎故障"));
+
+        PipelineRequest req = request(CreationMode.STANDARD);
+        req.setFeatures(Map.of("ruleRouting", true));
+        service.runAsync(24L, req);
+
+        verify(creationTaskService).completeTask(eq(24L), eq(false), anyInt(), anyLong());
+    }
+
+    /** 构造规则校验结果（executedRules 非空代表规则确有执行） */
+    private RuleCheckResult ruleResult(RuleViolation blocking) {
+        RuleCheckResult result = new RuleCheckResult();
+        result.markExecuted("RC-FAKE");
+        if (blocking != null) {
+            result.addBlocking(blocking);
+        }
+        return result;
+    }
+
+    private RuleViolation withBlocking(String ruleId, RuleSeverity severity) {
+        return RuleViolation.of(ruleId, severity, RuleStage.DRAFT, "死人出场且无复活设定", "局部重写该场景", false);
     }
 
     @Test

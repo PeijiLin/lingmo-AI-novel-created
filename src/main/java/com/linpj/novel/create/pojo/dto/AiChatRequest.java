@@ -30,6 +30,12 @@ public class AiChatRequest implements Serializable {
      */
     Integer maxRewriteRounds;
 
+    /** 本章目标字数（可空：未配置时 RC-11 字数规则静默） */
+    Integer targetWordCount;
+
+    /** 视角约束（如"第三人称限知"；可空：未配置时 RC-12 POV 规则静默） */
+    String pov;
+
     /**
      * 机制开关请求级覆盖（开关式双跑，v2.0 设计 7.1）：
      * 键为 PipelineFeatures 已知开关名（summaryTree/triTimeline/credibility/ruleRouting/convergenceGuard），

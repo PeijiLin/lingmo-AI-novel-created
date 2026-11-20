@@ -43,6 +43,12 @@ public class PipelineRequest implements Serializable {
     /** 机制开关请求级覆盖（null = 部署默认；仅已知键生效，见 PipelineFeatures.merged） */
     private Map<String, Boolean> features;
 
+    /** 本章目标字数（可空：未配置时 RC-11 字数规则静默） */
+    private Integer targetWordCount;
+
+    /** 视角约束（如"第三人称限知"；可空：未配置时 RC-12 POV 规则静默） */
+    private String pov;
+
     /** 由通用请求构建管道请求（mode/maxRewriteRounds 缺省走默认值） */
     public static PipelineRequest from(AiChatRequest request) {
         PipelineRequest pipelineRequest = new PipelineRequest();
@@ -61,6 +67,8 @@ public class PipelineRequest implements Serializable {
             pipelineRequest.setMaxRewriteRounds(Math.min(3, Math.max(1, request.getMaxRewriteRounds())));
         }
         pipelineRequest.setFeatures(request.getFeatures());
+        pipelineRequest.setTargetWordCount(request.getTargetWordCount());
+        pipelineRequest.setPov(request.getPov());
         return pipelineRequest;
     }
 }

@@ -11,6 +11,7 @@ import com.linpj.novel.create.pojo.pipeline.AsyncCreationTaskMessage;
 import com.linpj.novel.create.pojo.pipeline.ChapterOutline;
 import com.linpj.novel.create.pojo.pipeline.CreationMode;
 import com.linpj.novel.create.pojo.pipeline.CriticContext;
+import com.linpj.novel.create.pojo.pipeline.Issue;
 import com.linpj.novel.create.pojo.pipeline.PipelineRequest;
 import com.linpj.novel.create.pojo.pipeline.PlannerContext;
 import com.linpj.novel.create.pojo.pipeline.ReviewReport;
@@ -19,6 +20,12 @@ import com.linpj.novel.create.pojo.pipeline.StageEvent;
 import com.linpj.novel.create.pojo.pipeline.StageUsage;
 import com.linpj.novel.create.pojo.pipeline.WriterContext;
 import com.linpj.novel.create.producer.CreationEventProducer;
+import com.linpj.novel.create.rule.RuleCheckContext;
+import com.linpj.novel.create.rule.RuleCheckResult;
+import com.linpj.novel.create.rule.RuleChecker;
+import com.linpj.novel.create.rule.RuleSeverity;
+import com.linpj.novel.create.rule.RuleStage;
+import com.linpj.novel.create.rule.RuleViolation;
 import com.linpj.novel.create.service.ChapterOutlineStoreService;
 import com.linpj.novel.create.service.CreationTaskService;
 import com.linpj.novel.create.service.PlotThreadService;
@@ -33,7 +40,9 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -72,6 +81,9 @@ public class CreationPipelineService {
     /** PRECISE 落选稿的 artifact 轮次标记 */
     private static final int PRECISE_REJECTED_ROUND = 98;
 
+    /** 规则校验结果的 artifact 轮次标记（N3/N5，区别于 Critic 重写轮次） */
+    private static final int RULE_CHECK_ROUND = 97;
+
     /** PRECISE 双稿总超时（两稿并行，对齐单稿 Writer 180s） */
     private static final Duration DUAL_DRAFT_TIMEOUT = Duration.ofSeconds(180);
 
@@ -86,6 +98,7 @@ public class CreationPipelineService {
     private final ChapterOutlineStoreService outlineStoreService;
     private final CreationEventProducer creationEventProducer;
     private final PipelineFeatures pipelineFeatures;
+    private final RuleChecker ruleChecker;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -97,7 +110,8 @@ public class CreationPipelineService {
                                     PlotThreadService plotThreadService,
                                     ChapterOutlineStoreService outlineStoreService,
                                     CreationEventProducer creationEventProducer,
-                                    PipelineFeatures pipelineFeatures) {
+                                    PipelineFeatures pipelineFeatures,
+                                    RuleChecker ruleChecker) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -109,6 +123,7 @@ public class CreationPipelineService {
         this.outlineStoreService = outlineStoreService;
         this.creationEventProducer = creationEventProducer;
         this.pipelineFeatures = pipelineFeatures;
+        this.ruleChecker = ruleChecker;
     }
 
     // ------------------------------------------------------------------
@@ -171,12 +186,14 @@ public class CreationPipelineService {
         long startAt = System.currentTimeMillis();
         StageUsage usage = new StageUsage();
         boolean degraded;
+        // 运行时开关一次性解析（与落库快照同源）：后续各节点按此执行（v2.0 设计 7.1）
+        Map<String, Boolean> features = pipelineFeatures.merged(request.getFeatures());
         try {
             switch (request.getMode()) {
                 case FAST -> degraded = runFast(request, taskId, emitter, usage);
-                case STANDARD -> degraded = runStandard(request, taskId, emitter, usage);
-                case REFINED -> degraded = runRefined(request, taskId, emitter, usage);
-                case PRECISE -> degraded = runPrecise(request, taskId, emitter, usage);
+                case STANDARD -> degraded = runStandard(request, taskId, emitter, usage, features);
+                case REFINED -> degraded = runRefined(request, taskId, emitter, usage, features);
+                case PRECISE -> degraded = runPrecise(request, taskId, emitter, usage, features);
                 default -> throw new IllegalArgumentException("不支持的模式: " + request.getMode());
             }
             usage.setElapsedMs(System.currentTimeMillis() - startAt);
@@ -213,8 +230,9 @@ public class CreationPipelineService {
     // STANDARD：Writer -> Critic 闭环（含重写回路）
     // ------------------------------------------------------------------
 
-    private boolean runStandard(PipelineRequest request, Long taskId, ProgressEmitter emitter, StageUsage usage) {
-        DraftOutcome outcome = runWriterCriticLoop(request, taskId, emitter, usage, null, 1, 2);
+    private boolean runStandard(PipelineRequest request, Long taskId, ProgressEmitter emitter,
+                                StageUsage usage, Map<String, Boolean> features) {
+        DraftOutcome outcome = runWriterCriticLoop(request, taskId, emitter, usage, null, 1, 2, features);
         settlePlotLedger(request, outcome.draft());
         return outcome.degraded();
     }
@@ -223,14 +241,15 @@ public class CreationPipelineService {
     // REFINED：Planner -> Writer -> Critic(回路) -> Polisher（含复核）
     // ------------------------------------------------------------------
 
-    private boolean runRefined(PipelineRequest request, Long taskId, ProgressEmitter emitter, StageUsage usage) {
+    private boolean runRefined(PipelineRequest request, Long taskId, ProgressEmitter emitter,
+                               StageUsage usage, Map<String, Boolean> features) {
         final int total = 4; // PLANNING + WRITING + CRITIC + POLISHING
 
         // —— Planner（序号 1）——
-        PlanOutcome plan = runPlanning(request, taskId, emitter, usage, total);
+        PlanOutcome plan = runPlanning(request, taskId, emitter, usage, total, features);
 
         // —— Writer -> Critic 闭环（Writer 序号 2，Critic 序号 3）——
-        DraftOutcome outcome = runWriterCriticLoop(request, taskId, emitter, usage, plan.outline(), 2, total);
+        DraftOutcome outcome = runWriterCriticLoop(request, taskId, emitter, usage, plan.outline(), 2, total, features);
 
         // —— 伏笔记账 + Polisher（序号 4）——
         settleLedger(request, plan.outline(), outcome.draft());
@@ -243,12 +262,13 @@ public class CreationPipelineService {
     // PRECISE：REFINED + Writer 并行双稿择优（设计 11.2）
     // ------------------------------------------------------------------
 
-    private boolean runPrecise(PipelineRequest request, Long taskId, ProgressEmitter emitter, StageUsage usage) {
+    private boolean runPrecise(PipelineRequest request, Long taskId, ProgressEmitter emitter,
+                               StageUsage usage, Map<String, Boolean> features) {
         final int total = 4;
         boolean degraded = false;
 
         // —— Planner（序号 1）——
-        PlanOutcome plan = runPlanning(request, taskId, emitter, usage, total);
+        PlanOutcome plan = runPlanning(request, taskId, emitter, usage, total, features);
         degraded = degraded || plan.degraded();
 
         // —— 并行双稿（N=2：标准稿流式转发，变体稿静默聚合）——
@@ -310,8 +330,11 @@ public class CreationPipelineService {
         }
 
         // —— 择优后照常进入重写回路（最优稿仍有 HIGH 问题时）——
+        // N5 规则校验并入胜稿评审报告（P6：硬校验不因择优而缺席）
+        CriticAgent.ReviewResult selectedWithRules =
+                reviewWithRules(request, taskId, selectedDraft, plan.outline(), selectedReview, features);
         DraftOutcome outcome = rewriteLoop(request, taskId, emitter, usage, plan.outline(),
-                writerContext, selectedDraft, selectedReview.report(), 2, total);
+                writerContext, selectedDraft, selectedWithRules.report(), 2, total, features);
 
         // —— 伏笔记账 + Polisher（序号 4）——
         settleLedger(request, plan.outline(), outcome.draft());
@@ -330,7 +353,7 @@ public class CreationPipelineService {
 
     /** Planner 阶段（失败/空产物降级：跳过大纲，Writer 直接吃用户输入，管道不中断） */
     private PlanOutcome runPlanning(PipelineRequest request, Long taskId, ProgressEmitter emitter,
-                                    StageUsage usage, int total) {
+                                    StageUsage usage, int total, Map<String, Boolean> features) {
         emitter.emitStage(StageEvent.started(StageCode.PLANNING, 1, total));
         creationTaskService.advanceStage(taskId, StageCode.PLANNING.name());
         try {
@@ -346,6 +369,8 @@ public class CreationPipelineService {
             }
             outlineStoreService.saveOutline(request.getBookId(), request.getChapterId(), outline);
             saveArtifact(taskId, StageCode.PLANNING, 1, outline, planResult.tokens());
+            // N3 细纲预审（v2.0 设计 5.1）：仅记录与落档，阻塞决策待人审卡点（B4/M3）
+            runOutlineRuleCheck(request, taskId, outline, features);
             return new PlanOutcome(outline, false);
         } catch (Exception e) {
             log.warn("Planner 失败，降级为直接续写: {}", e.getMessage());
@@ -416,7 +441,8 @@ public class CreationPipelineService {
      * @param total        管道阶段总数
      */
     private DraftOutcome runWriterCriticLoop(PipelineRequest request, Long taskId, ProgressEmitter emitter,
-                                             StageUsage usage, ChapterOutline outline, int writerIndex, int total) {
+                                             StageUsage usage, ChapterOutline outline, int writerIndex,
+                                             int total, Map<String, Boolean> features) {
         // —— Writer 首轮 ——
         emitter.emitStage(StageEvent.started(StageCode.WRITING, writerIndex, total));
         creationTaskService.advanceStage(taskId, StageCode.WRITING.name());
@@ -426,16 +452,18 @@ public class CreationPipelineService {
         usage.addTokens(writeResult.tokens());
         usage.setStages(usage.getStages() + 1);
 
-        // —— Critic 首审 ——
+        // —— Critic 首审（N5 规则校验并入：阻塞级 HIGH 违规与 Critic 问题同构参与重写触发）——
         emitter.emitStage(StageEvent.started(StageCode.CRITIC, writerIndex + 1, total));
         creationTaskService.advanceStage(taskId, StageCode.CRITIC.name());
-        CriticAgent.ReviewResult firstReview = reviewDraft(request, writeResult.text(), outline);
+        CriticAgent.ReviewResult baseReview = reviewDraft(request, writeResult.text(), outline);
+        CriticAgent.ReviewResult firstReview =
+                reviewWithRules(request, taskId, writeResult.text(), outline, baseReview, features);
         saveArtifact(taskId, StageCode.CRITIC, 1, firstReview.report(), firstReview.tokens());
         usage.addTokens(firstReview.tokens());
         usage.setStages(usage.getStages() + 1);
 
         return rewriteLoop(request, taskId, emitter, usage, outline, writerContext,
-                writeResult.text(), firstReview.report(), writerIndex, total);
+                writeResult.text(), firstReview.report(), writerIndex, total, features);
     }
 
     /**
@@ -446,7 +474,8 @@ public class CreationPipelineService {
      */
     private DraftOutcome rewriteLoop(PipelineRequest request, Long taskId, ProgressEmitter emitter,
                                      StageUsage usage, ChapterOutline outline, WriterContext writerContext,
-                                     String draft, ReviewReport firstReport, int writerIndex, int total) {
+                                     String draft, ReviewReport firstReport, int writerIndex, int total,
+                                     Map<String, Boolean> features) {
         ReviewReport report = firstReport;
         int round = 1;
         while (!report.isApproved() && round <= request.getMaxRewriteRounds() && shouldRewrite(report, round)) {
@@ -461,7 +490,9 @@ public class CreationPipelineService {
 
             emitter.emitStage(StageEvent.started(StageCode.CRITIC, writerIndex + 1, total));
             creationTaskService.advanceStage(taskId, StageCode.CRITIC.name());
-            CriticAgent.ReviewResult recheck = reviewDraft(request, draft, outline);
+            CriticAgent.ReviewResult baseRecheck = reviewDraft(request, draft, outline);
+            CriticAgent.ReviewResult recheck =
+                    reviewWithRules(request, taskId, draft, outline, baseRecheck, features);
             saveArtifact(taskId, StageCode.CRITIC, round + 1, recheck.report(), recheck.tokens());
             usage.addTokens(recheck.tokens());
             usage.setStages(usage.getStages() + 1);
@@ -480,6 +511,105 @@ public class CreationPipelineService {
             return true;
         }
         return report.hasMediumIssue() && round == 1;
+    }
+
+    // ------------------------------------------------------------------
+    // 确定性规则校验节点（N3/N5，ruleRouting 总闸门控——v2.0 M1-B3）
+    // ------------------------------------------------------------------
+
+    /**
+     * N5 前置：在 Critic 评审结果上并入规则校验。
+     *
+     * - ruleRouting 关闭（默认）：原样返回，管道行为与主线完全一致（TC-32 关开关回归）
+     * - 阻塞级违规以 Critic Issue 同构形式并入（severity/type/evidence/suggestion），
+     *   复用既有 shouldRewrite 分流：HIGH 强制重写、MEDIUM 附建议一轮——不发明新控制流
+     * - P6 不可让渡：Critic 故障降级（视为通过）时，阻塞级规则违规仍然强制重写
+     *
+     * @return 并入规则后的评审结果（token 计 Critic 原值，规则校验为代码组件无 token）
+     */
+    private CriticAgent.ReviewResult reviewWithRules(PipelineRequest request, Long taskId, String draft,
+                                                     ChapterOutline outline, CriticAgent.ReviewResult base,
+                                                     Map<String, Boolean> features) {
+        if (!Boolean.TRUE.equals(features.get("ruleRouting"))) {
+            return base;
+        }
+        RuleCheckResult rules = runRuleCheck(request, taskId, RuleStage.DRAFT, draft, outline);
+        if (rules == null) {
+            return base;
+        }
+        return new CriticAgent.ReviewResult(
+                mergeRulesIntoReport(base.report(), rules.getBlocking()), base.tokens());
+    }
+
+    /** N3 细纲预审：仅记录与落档（阻塞决策待人审卡点 B4/M3；当前规则集均为 DRAFT 时机，OUTLINE 上下文为接线预留） */
+    private void runOutlineRuleCheck(PipelineRequest request, Long taskId, ChapterOutline outline,
+                                     Map<String, Boolean> features) {
+        if (!Boolean.TRUE.equals(features.get("ruleRouting"))) {
+            return;
+        }
+        runRuleCheck(request, taskId, RuleStage.OUTLINE, null, outline);
+    }
+
+    /**
+     * 执行规则校验并落档（RULE_CHECK_ROUND=97 区别于 Critic 评审轮次）。
+     *
+     * @return 校验结果；无已启用规则执行（全 OFF / 时机无匹配）时返回 null——不产生空产物
+     */
+    private RuleCheckResult runRuleCheck(PipelineRequest request, Long taskId, RuleStage stage,
+                                         String draft, ChapterOutline outline) {
+        try {
+            RuleCheckContext context = RuleCheckContext.of(stage);
+            context.setDraft(draft);
+            context.setOutline(outline);
+            context.setTargetWordCount(request.getTargetWordCount());
+            context.setPov(request.getPov());
+            RuleCheckResult result = ruleChecker.check(context);
+            if (result.getExecutedRules().isEmpty()) {
+                return null;
+            }
+            if (!result.getShadow().isEmpty()) {
+                // 影子态违规：只记录（分级上线观测数据，不参与阻塞）
+                log.info("规则影子命中（不阻塞）: taskId={}, shadow={}", taskId, result.getShadow());
+            }
+            if (!result.getBlocking().isEmpty() || !result.getShadow().isEmpty()) {
+                saveArtifact(taskId, StageCode.CRITIC, RULE_CHECK_ROUND,
+                        Map.of("stage", stage.name(), "blocking", result.getBlocking(),
+                                "shadow", result.getShadow()), 0);
+            }
+            return result;
+        } catch (Exception e) {
+            // 规则校验故障不阻断管道（RuleChecker 内已降级单规则，此处兜底整体故障）
+            log.warn("规则校验失败（跳过，管道继续）: taskId={}", taskId, e);
+            return null;
+        }
+    }
+
+    /** 阻塞级违规并入 Critic 报告（同构 Issue；HIGH 违规强制 approved=false） */
+    private static ReviewReport mergeRulesIntoReport(ReviewReport base, List<RuleViolation> blocking) {
+        if (blocking == null || blocking.isEmpty()) {
+            return base;
+        }
+        ReviewReport merged = new ReviewReport();
+        merged.setApproved(base.isApproved());
+        merged.setOverallScore(base.getOverallScore());
+        merged.setSummary(base.getSummary() == null ? "" : base.getSummary());
+        List<Issue> issues = base.getIssues() == null ? new ArrayList<>() : new ArrayList<>(base.getIssues());
+        boolean anyHigh = false;
+        for (RuleViolation violation : blocking) {
+            Issue issue = new Issue();
+            issue.setSeverity(violation.getSeverity().name());
+            issue.setType("WORLD_RULE_" + violation.getRuleId());
+            issue.setProblem(violation.getEvidence());
+            issue.setEvidence(violation.getEvidence());
+            issue.setSuggestion(violation.getSuggestion());
+            issues.add(issue);
+            anyHigh = anyHigh || violation.getSeverity() == RuleSeverity.HIGH;
+        }
+        merged.setIssues(issues);
+        if (anyHigh) {
+            merged.setApproved(false);
+        }
+        return merged;
     }
 
     // ------------------------------------------------------------------
