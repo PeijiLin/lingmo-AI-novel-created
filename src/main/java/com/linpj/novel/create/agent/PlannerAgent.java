@@ -71,6 +71,9 @@ public class PlannerAgent {
                    - RESOLVE / ADVANCE 必须引用已存在伏笔的 threadId（来自活跃伏笔清单）
                    - PLANT 新埋伏笔时 threadId 留空，description 必填
                    - 没有伏笔操作时 plotOps 返回空数组
+                   - 秘密类伏笔（角色间尚未公知的真相，如身世/凶手/暗中交易）PLANT 时额外提供：
+                     whoKnows=当前知情角色ID数组（埋设时刻在场或已知者）；secretKey=短关键词（如"师父死因"，正文中指代这一秘密的惯用短语，不超过 10 字）。
+                     RESOLVE/ADVANCE 若有新角色知情，也用 whoKnows 声明（收束=合法揭穿时刻）。
                 4. 章节大纲要与前情摘要自然衔接，不重复已发生的情节。
                 5. 场景叙事模式（narrativeMode，默认 NORMAL 可省略）：
                    - NORMAL：正常时间推进。

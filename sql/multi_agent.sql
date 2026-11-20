@@ -154,3 +154,24 @@ CREATE TABLE IF NOT EXISTS novel_state_fact (
     created_at         TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_state_fact_lookup ON novel_state_fact(book_id, character_id, valid_from_chapter);
+
+-- 伏笔知情集合（v2.0 M2-C5：秘密的闭世界判定——查询"谁知道"，不穷举"谁不知道"）
+-- whoKnows 非空即视为"带知情边界的事实"；secretKey 为正文可检索短关键词（RC-05 文本定位用）
+ALTER TABLE novel_plot_threads ADD COLUMN IF NOT EXISTS who_knows JSONB;
+ALTER TABLE novel_plot_threads ADD COLUMN IF NOT EXISTS secret_key VARCHAR(200);
+
+-- 待证实断言区（v2.0 M2-C6：非 FACT 断言隔离——升格 >=2 独立锚点，30 章未证实过期）
+CREATE TABLE IF NOT EXISTS novel_pending_assertion (
+    id             BIGSERIAL PRIMARY KEY,
+    book_id        BIGINT NOT NULL,
+    chapter_id     BIGINT,
+    character_id   BIGINT,
+    assertion_type VARCHAR(20) NOT NULL,    -- LIE / HEARSAY / HYPOTHETICAL / DREAM
+    payload        JSONB NOT NULL,          -- 抽取快照原文（升格时作为 FACT 依据）
+    status         VARCHAR(20) NOT NULL DEFAULT 'PENDING',   -- PENDING / CONFIRMED / EXPIRED / REJECTED
+    confirmations  INTEGER NOT NULL DEFAULT 0,
+    expires_chapter BIGINT,                 -- chapterId + 30；过期清理进归档（不物理删除）
+    created_at     TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    resolved_at    TIMESTAMP WITH TIME ZONE
+);
+CREATE INDEX IF NOT EXISTS idx_pending_assertion_book ON novel_pending_assertion(book_id, status);

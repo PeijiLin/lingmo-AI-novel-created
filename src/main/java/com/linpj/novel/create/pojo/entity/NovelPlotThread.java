@@ -1,8 +1,10 @@
 package com.linpj.novel.create.pojo.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.linpj.novel.create.utils.JsonbTypeHandler;
 import lombok.Data;
 
 import java.io.Serializable;
@@ -35,6 +37,16 @@ public class NovelPlotThread implements Serializable {
 
     /** 收束章节 ID */
     private Long resolvedChapterId;
+
+    /**
+     * 知情集合（v2.0 M2-C5 闭世界：JSONB 角色ID数组，非空即"带知情边界的事实"）。
+     * 闭世界判定：角色 A 是否知道 S = 查询 A ∈ whoKnows，不穷举不知道。
+     */
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private Object whoKnows;
+
+    /** 正文可检索短关键词（如"师父死因"）——RC-05 对成稿做知识边界文本定位用（null=不做文本定位） */
+    private String secretKey;
 
     private Date createdAt;
 

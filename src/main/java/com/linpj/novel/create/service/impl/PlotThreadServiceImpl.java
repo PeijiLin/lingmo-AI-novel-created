@@ -60,6 +60,22 @@ public class PlotThreadServiceImpl extends ServiceImpl<NovelPlotThreadMapper, No
     }
 
     @Override
+    public List<NovelPlotThread> listSecretThreads(Long bookId) {
+        if (bookId == null) {
+            return List.of();
+        }
+        // whoKnows 3 NULL：JSONB 非 null 事实（含空数组），避免误把未维护线程当秘密
+        return this.list(new LambdaQueryWrapper<NovelPlotThread>()
+                .eq(NovelPlotThread::getBookId, bookId)
+                .eq(NovelPlotThread::getStatus, STATUS_OPEN)
+                .isNotNull(NovelPlotThread::getWhoKnows)
+                .orderByAsc(NovelPlotThread::getId))
+                .stream()
+                .filter(thread -> !PlotThreadService.whoKnowsOf(thread).isEmpty())
+                .toList();
+    }
+
+    @Override
     @Transactional
     public void applyPlotOperations(Long bookId, Long chapterId, List<PlotOperation> plotOps) {
         if (plotOps == null || plotOps.isEmpty() || bookId == null) {
@@ -97,8 +113,11 @@ public class PlotThreadServiceImpl extends ServiceImpl<NovelPlotThreadMapper, No
         thread.setDescription(description);
         thread.setPlantedChapterId(chapterId);
         thread.setStatus(STATUS_OPEN);
+        thread.setWhoKnows(op.getWhoKnows());
+        thread.setSecretKey(trimToNull(op.getSecretKey()));
         this.save(thread);
-        log.info("伏笔入账[PLANT]: bookId={}, threadId={}, desc={}", bookId, thread.getId(), description);
+        log.info("伏笔入账[PLANT]: bookId={}, threadId={}, desc={}, whoKnows={}",
+                bookId, thread.getId(), description, op.getWhoKnows());
     }
 
     private void resolveThread(Long bookId, Long chapterId, PlotOperation op) {
@@ -122,6 +141,8 @@ public class PlotThreadServiceImpl extends ServiceImpl<NovelPlotThreadMapper, No
         update.setStatus(STATUS_RESOLVED);
         update.setResolvedChapterId(chapterId);
         update.setUpdatedAt(new Date());
+        // 收束 = 合法揭穿时刻：把本次新增知情者并入集合（闭世界集合只在增长方向维护）
+        mergeWhoKnows(threadId, op.getWhoKnows(), update);
         this.updateById(update);
         log.info("伏笔入账[RESOLVE]: bookId={}, threadId={}, chapterId={}", bookId, threadId, chapterId);
     }
@@ -133,7 +154,28 @@ public class PlotThreadServiceImpl extends ServiceImpl<NovelPlotThreadMapper, No
         NovelPlotThread update = new NovelPlotThread();
         update.setId(op.getThreadId());
         update.setUpdatedAt(new Date());
+        mergeWhoKnows(op.getThreadId(), op.getWhoKnows(), update);
         this.updateById(update);
+    }
+
+    /**
+     * 知情集合并集合并（v2.0 M2-C5）：数据库旧集合 ∪ 入参新集合，回写 update 实体。
+     * 闭世界集合只增不减（知情不可撤销——"忘了"也按风险面更大处理）；旧集合缺失时直接落数组。
+     */
+    private void mergeWhoKnows(Long threadId, List<Long> additions, NovelPlotThread update) {
+        if (additions == null || additions.isEmpty()) {
+            return;
+        }
+        try {
+            NovelPlotThread existing = this.getById(threadId);
+            java.util.Set<Long> merged = existing == null
+                    ? new java.util.HashSet<>() : PlotThreadService.whoKnowsOf(existing);
+            merged.addAll(additions);
+            update.setWhoKnows(new java.util.ArrayList<>(merged));
+        } catch (Exception e) {
+            // 知情集合维护失败不阻正记账（规则侧宁可漏检不可阻断推进）
+            log.warn("whoKnows 合并失败（忽略新增）: threadId={}, error={}", threadId, e.getMessage());
+        }
     }
 
     @Override

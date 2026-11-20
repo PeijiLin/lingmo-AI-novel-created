@@ -127,6 +127,93 @@ class PlotThreadServiceImplTest {
         assertEquals(10L, captor.getValue().getPlantedChapterId());
     }
 
+    // ------------------------------------------------------------------
+    // 知情集合维护（v2.0 M2-C5 闭世界：whoKnows 只增不减）
+    // ------------------------------------------------------------------
+
+    @Test
+    void plantSecretPersistsWhoKnowsAndSecretKey() {
+        doReturn(0L).when(service).count(any());
+        doReturn(true).when(service).save(any(NovelPlotThread.class));
+
+        PlotOperation op = new PlotOperation();
+        op.setOp("PLANT");
+        op.setDescription("林砚查知师父死因另有隐情");
+        op.setWhoKnows(List.of(1L));
+        op.setSecretKey("师父死因");
+        service.applyPlotOperations(1L, 10L, List.of(op));
+
+        ArgumentCaptor<NovelPlotThread> captor = ArgumentCaptor.forClass(NovelPlotThread.class);
+        verify(service).save(captor.capture());
+        assertEquals(List.of(1L), captor.getValue().getWhoKnows());
+        assertEquals("师父死因", captor.getValue().getSecretKey());
+    }
+
+    @Test
+    void advanceMergesWhoKnowsByUnion() {
+        NovelPlotThread existing = new NovelPlotThread();
+        existing.setId(7L);
+        existing.setWhoKnows(List.of(1L, 3L));
+        doReturn(existing).when(service).getById(7L);
+        doReturn(true).when(service).updateById(any(NovelPlotThread.class));
+
+        PlotOperation op = new PlotOperation();
+        op.setOp("ADVANCE");
+        op.setThreadId(7L);
+        op.setWhoKnows(List.of(3L, 5L)); // 3 已知情：并集去重
+        service.applyPlotOperations(1L, 10L, List.of(op));
+
+        ArgumentCaptor<NovelPlotThread> captor = ArgumentCaptor.forClass(NovelPlotThread.class);
+        verify(service).updateById(captor.capture());
+        List<?> merged = (List<?>) captor.getValue().getWhoKnows();
+        assertEquals(3, merged.size());
+        assertTrue(merged.containsAll(List.of(1L, 3L, 5L)), "知情集合并集合并（只增不减）");
+    }
+
+    @Test
+    void resolveMergesNewlyInformedKnowers() {
+        NovelPlotThread existing = new NovelPlotThread();
+        existing.setId(7L);
+        existing.setWhoKnows(List.of(1L));
+        doReturn(existing).when(service).getById(7L);
+        doReturn(true).when(service).updateById(any(NovelPlotThread.class));
+
+        PlotOperation op = new PlotOperation();
+        op.setOp("RESOLVE");
+        op.setThreadId(7L);
+        op.setWhoKnows(List.of(2L));
+        service.applyPlotOperations(1L, 10L, List.of(op));
+
+        ArgumentCaptor<NovelPlotThread> captor = ArgumentCaptor.forClass(NovelPlotThread.class);
+        verify(service).updateById(captor.capture());
+        assertEquals("RESOLVED", captor.getValue().getStatus());
+        List<?> merged = (List<?>) captor.getValue().getWhoKnows();
+        assertEquals(2, merged.size());
+        assertTrue(merged.containsAll(List.of(1L, 2L)), "收束=合法揭穿时刻：新增知情并入集合");
+    }
+
+    @Test
+    void listSecretThreadsKeepsOnlyThoseWithKnowers() {
+        NovelPlotThread secret = new NovelPlotThread();
+        secret.setId(1L);
+        secret.setStatus("OPEN");
+        secret.setWhoKnows(List.of(1L));
+        NovelPlotThread notSecret = new NovelPlotThread();
+        notSecret.setId(2L);
+        notSecret.setStatus("OPEN");
+        notSecret.setWhoKnows(null);
+        NovelPlotThread empty = new NovelPlotThread();
+        empty.setId(3L);
+        empty.setStatus("OPEN");
+        empty.setWhoKnows(List.of());
+        doReturn(List.of(secret, notSecret, empty)).when(service).list(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+
+        List<NovelPlotThread> secrets = service.listSecretThreads(1L);
+
+        assertEquals(1, secrets.size());
+        assertEquals(1L, secrets.get(0).getId(), "无知情集合的线程不是秘密（数据缺失≠秘密）");
+    }
+
     @Test
     void plantOperationIsIdempotentOnDuplicateDescription() {
         doReturn(1L).when(service).count(any());
