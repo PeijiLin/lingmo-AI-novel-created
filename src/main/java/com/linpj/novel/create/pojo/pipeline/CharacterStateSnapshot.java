@@ -47,6 +47,13 @@ public class CharacterStateSnapshot implements Serializable {
     private List<String> itemNames;
 
     /**
+     * 断言可信度（v2.0 设计 2.3，C6）：FACT / HYPOTHETICAL / HEARSAY / DREAM / LIE（原始字符串，
+     * 消费端经 AssertionType.parse 容错解析；null/非法归 FACT——快照主体字段错误入账风险
+     * 低于整章账本跳过）。非 FACT 不进权威层，入待证实区（novel_pending_assertion）。
+     */
+    private String assertionType;
+
+    /**
      * 抽取置信度（0.0–1.0，v2.0 设计 2.5 抽取质量护栏）：
      * 基于正文表述明确程度的自评；低于 confidenceThreshold 的快照不进权威层（不入账，留审计日志）。
      * null = 模型未声明（迁移期宽松处理：照常入账，日志提示）

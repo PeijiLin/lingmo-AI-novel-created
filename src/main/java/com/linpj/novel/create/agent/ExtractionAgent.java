@@ -1,11 +1,11 @@
 package com.linpj.novel.create.agent;
 
-import com.linpj.novel.create.pojo.pipeline.CharacterStateSnapshot;
+import com.linpj.novel.create.pojo.pipeline.ChapterExtraction;
+import com.linpj.novel.create.pojo.pipeline.EventExtraction;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.converter.BeanOutputConverter;
-import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -15,7 +15,8 @@ import java.util.Objects;
  * 抽取 Agent（章节定稿后的账本维护节点）
  *
  * - rollUpDigest：章节摘要 -> 与旧摘要合并滚动更新 story_digest（一次额外调用）
- * - extractStates：从正文抽取出场人物动态状态 -> 增量维护 character_state（每章一次）
+ * - extractChapter：统一抽取——人物状态快照（含置信度/断言分级）+ 事件时间线原料，
+ *   同一次调用产出（v2.0 C2/C6 合并决策：逐产物单独调用是成本与漂移双敞口）
  *
  * 设计 5.3：抽取只做账本的"补充与修正"，不承担伏笔准入（准入靠 Planner 声明 + Critic 复核）。
  *
@@ -24,14 +25,19 @@ import java.util.Objects;
 @Service
 public class ExtractionAgent {
 
-    /** 人物状态抽取结果 */
-    public record ExtractionResult(List<CharacterStateSnapshot> snapshots, long tokens) {
+    /** 章节统一抽取结果（snapshots + events + token 用量） */
+    public record ExtractionResult(ChapterExtraction extraction, long tokens) {
+        public static ExtractionResult empty(long tokens) {
+            ChapterExtraction empty = new ChapterExtraction();
+            empty.setSnapshots(List.of());
+            empty.setEvents(List.of());
+            return new ExtractionResult(empty, tokens);
+        }
     }
 
     private final ChatClient chatClient;
-    private final BeanOutputConverter<List<CharacterStateSnapshot>> converter =
-            new BeanOutputConverter<>(new ParameterizedTypeReference<>() {
-            });
+    private final BeanOutputConverter<ChapterExtraction> converter =
+            new BeanOutputConverter<>(ChapterExtraction.class);
 
     public ExtractionAgent(ChatModel chatModel, ModelCallLog modelCallLog) {
         this.chatClient = ChatClient.builder(chatModel)
@@ -71,14 +77,14 @@ public class ExtractionAgent {
     }
 
     /**
-     * 从章节正文抽取出场人物的动态状态快照
+     * 章节统一抽取：人物状态快照 + 关键事件（含结构化时间偏移与叙事模式）
      *
      * @param chapterContent     章节正文（已剥离内联标记）
      * @param characterListText 角色清单文本（"角色ID: x, 角色名: y" 每行一个）
      */
-    public ExtractionResult extractStates(String chapterContent, String characterListText) {
-        String userPrompt = "请从以下章节正文中抽取每个出场人物的最新动态状态。\n\n"
-                + "【角色清单（characterId 从中选择，未出场者不要输出）】\n"
+    public ExtractionResult extractChapter(String chapterContent, String characterListText) {
+        String userPrompt = "请从以下章节正文中完成两项抽取：每位出场人物的最新动态状态快照，以及本章关键事件。\n\n"
+                + "【角色清单（characterId/participants 从中选择，未出场者不要输出）】\n"
                 + Objects.requireNonNullElse(characterListText, "（未知，若无法确定角色ID则跳过该角色）")
                 + "\n\n【章节正文】\n" + chapterContent
                 + "\n\n" + converter.getFormat();
@@ -106,6 +112,25 @@ public class ExtractionAgent {
                                 - 低于 0.6：多为代词指代不清、记忆闪回、梦境等不可靠叙述——宁可填低值，不要编造
                                 低置信度快照会被人审复核，不会直接采用。
 
+                                【断言可信度（assertionType 字段必填，v2.0 设计 2.3）】
+                                - FACT：叙述层直陈的状态事实（默认）。
+                                - HYPOTHETICAL：整条状态来自角色推测（"他料想顾昭已南下"）。
+                                - HEARSAY：来自他人转述/传闻（"据斥候来报，顾昭已南下"）。
+                                - DREAM：来自梦境/幻觉场景的内容。
+                                - 不要输出 LIE（谎言无法在局部正文中判定，由作者标注）。
+                                一次只看该状态本身怎么被叙述——推测/传闻/梦境来源必须如实标注，
+                                标注错的代价是污染正典事实账本。
+
+                                【events：本章关键事件（1-5 条，只取影响后续剧情的实质事件）】
+                                - eventDesc：一句话事件描述（如"林砚抵达王都与顾昭会盟"）。
+                                - narrativeMode：NORMAL / FLASHBACK（回忆）/ DREAM（梦）/ STORY_IN_STORY（戏中戏）；拿不准不填。
+                                - 时间结构化（公理分工：你只识别语义，日期由代码计算——绝不自己算日期）：
+                                   timeKind=DAY_OFFSET：相对表述（"三天后"），days=偏移整数；
+                                   timeKind=FUZZY：模糊表述（"半月已过"），days=估计天数；
+                                   timeKind=ABSOLUTE_LABEL：架空历法原文（"青云历314年春"），timeLabel=原文照抄；
+                                   无时间信息：timeKind 留空，days 不填——绝不猜天数。
+                                - participants：参与角色 ID 数组；location：地名。
+
                                 只输出 JSON。
                                 """)
                         .user(userPrompt)
@@ -113,9 +138,18 @@ public class ExtractionAgent {
                         .chatResponse(),
                 "抽取响应为空");
 
-        List<CharacterStateSnapshot> snapshots = converter.convert(
+        ChapterExtraction extraction = converter.convert(
                 Objects.requireNonNullElse(WriterAgent.extractText(response), ""));
         long tokens = WriterAgent.usageOf(response);
-        return new ExtractionResult(snapshots == null ? List.of() : snapshots, tokens);
+        if (extraction == null) {
+            return ExtractionResult.empty(tokens);
+        }
+        if (extraction.getSnapshots() == null) {
+            extraction.setSnapshots(List.of());
+        }
+        if (extraction.getEvents() == null) {
+            extraction.setEvents(List.of());
+        }
+        return new ExtractionResult(extraction, tokens);
     }
 }

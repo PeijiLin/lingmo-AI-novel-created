@@ -3,8 +3,10 @@ package com.linpj.novel.create.worldstate;
 import com.linpj.novel.create.agent.ExtractionAgent;
 import com.linpj.novel.create.config.PipelineExtractionProperties;
 import com.linpj.novel.create.config.PipelineFeatures;
+import com.linpj.novel.create.pojo.pipeline.AssertionType;
 import com.linpj.novel.create.pojo.pipeline.AliveStatus;
 import com.linpj.novel.create.pojo.pipeline.CharacterStateSnapshot;
+import com.linpj.novel.create.pojo.pipeline.EventExtraction;
 import com.linpj.novel.create.utils.JsonUtil;
 import com.linpj.novel.create.pojo.vo.CharacterCardsVo;
 import com.linpj.novel.create.service.CharacterCardsService;
@@ -55,6 +57,8 @@ public class ChapterFinalizeService {
     private final PipelineFeatures pipelineFeatures;
     private final WikiConflictService wikiConflictService;
     private final StateHistoryService stateHistoryService;
+    private final PendingAssertionService pendingAssertionService;
+    private final EventTimelineService eventTimelineService;
 
     public ChapterFinalizeService(ExtractionAgent extractionAgent,
                                    StoryDigestService storyDigestService,
@@ -65,7 +69,9 @@ public class ChapterFinalizeService {
                                    PipelineExtractionProperties extractionProperties,
                                    PipelineFeatures pipelineFeatures,
                                    WikiConflictService wikiConflictService,
-                                   StateHistoryService stateHistoryService) {
+                                   StateHistoryService stateHistoryService,
+                                   PendingAssertionService pendingAssertionService,
+                                   EventTimelineService eventTimelineService) {
         this.extractionAgent = extractionAgent;
         this.storyDigestService = storyDigestService;
         this.characterStateService = characterStateService;
@@ -76,6 +82,8 @@ public class ChapterFinalizeService {
         this.pipelineFeatures = pipelineFeatures;
         this.wikiConflictService = wikiConflictService;
         this.stateHistoryService = stateHistoryService;
+        this.pendingAssertionService = pendingAssertionService;
+        this.eventTimelineService = eventTimelineService;
     }
 
     /**
@@ -109,30 +117,103 @@ public class ChapterFinalizeService {
                 storyDigestService.saveDigest(bookId, chapterId, digest.trim());
             }
 
-            // 2. 人物动态状态抽取 -> 增量维护 character_state（v2.0 设计 2.5：低置信度不入权威层）
+            // 2. 统一抽取（人物快照 + 事件时间线，同一次调用）-> 分级入账
             ExtractionAgent.ExtractionResult result =
-                    extractionAgent.extractStates(cleanContent, renderCharacterList(bookId));
-            if (result.snapshots() != null) {
-                for (CharacterStateSnapshot snapshot : result.snapshots()) {
-                    if (snapshot != null && snapshot.getCharacterId() != null) {
-                        if (isLowConfidence(snapshot)) {
-                            // 不入账（不进权威层）：快照内容进日志留审计，待人审队列（M1-B4/M3）接管为待审条目
-                            log.warn("低置信度抽取不入账（待人审）: bookId={}, chapterId={}, characterId={}, confidence={}, snapshot={}",
-                                    bookId, chapterId, snapshot.getCharacterId(), snapshot.getConfidence(),
-                                    JsonUtil.toJson(snapshot));
-                            continue;
-                        }
-                        applyStateWithArbitration(bookId, chapterId, snapshot);
+                    extractionAgent.extractChapter(cleanContent, renderCharacterList(bookId));
+            List<CharacterStateSnapshot> snapshots =
+                    result.extraction() == null || result.extraction().getSnapshots() == null
+                            ? List.of() : result.extraction().getSnapshots();
+            for (CharacterStateSnapshot snapshot : snapshots) {
+                if (snapshot != null && snapshot.getCharacterId() != null) {
+                    if (isLowConfidence(snapshot)) {
+                        // 不入账（不进权威层）：快照内容进日志留审计，待人审队列（M1-B4/M3）接管为待审条目
+                        log.warn("低置信度抽取不入账（待人审）: bookId={}, chapterId={}, characterId={}, confidence={}, snapshot={}",
+                                bookId, chapterId, snapshot.getCharacterId(), snapshot.getConfidence(),
+                                JsonUtil.toJson(snapshot));
+                        continue;
                     }
+                    if (isNonFactQuarantined(snapshot)) {
+                        // 非 FACT（推测/传闻/梦境）：隔离进待证实区，不进正典权威层（v2.0 设计 2.3）
+                        AssertionType type = AssertionType.parse(snapshot.getAssertionType());
+                        pendingAssertionService.record(bookId, chapterId, snapshot.getCharacterId(),
+                                type.name(), snapshot);
+                        log.info("非 FACT 断言隔离待证实: bookId={}, chapterId={}, characterId={}, type={}",
+                                bookId, chapterId, snapshot.getCharacterId(), type);
+                        continue;
+                    }
+                    applyStateWithArbitration(bookId, chapterId, snapshot);
                 }
             }
+
+            // 3. 事件入账时间线（含归一化：LLM 出偏移，代码做算术）
+            recordEvents(result.extraction() == null ? List.of() : result.extraction().getEvents(),
+                    bookId, chapterId);
+
+            // 4. 待证实断言过期清扫（30 章未证实自动归档）
+            if (pipelineFeatures.isCredibility()) {
+                pendingAssertionService.expireOutdated(bookId, chapterId);
+            }
+
             markProcessed(chapterId, content);
             log.info("章节定稿结算完成: bookId={}, chapterId={}, 摘要={}字, 人物状态={}个",
-                    bookId, chapterId, digest == null ? 0 : digest.length(),
-                    result.snapshots() == null ? 0 : result.snapshots().size());
+                    bookId, chapterId, digest == null ? 0 : digest.length(), snapshots.size());
         } catch (Exception e) {
             log.error("章节定稿结算失败（不影响章节保存）: bookId={}, chapterId={}", bookId, chapterId, e);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 断言可信度门禁（v2.0 设计 2.3 / M2-C6）与事件入账（C2 承接）
+    // ------------------------------------------------------------------
+
+    /**
+     * 非 FACT 判定（credibility 部署开关门控）：关闭时全部按 FACT 走现状路径。
+     * null/非法标签归 FACT——快照主体字段的错误入账风险低于整章账本跳过，
+     * 漂移率由 S6 探针度量后再收紧。
+     */
+    private boolean isNonFactQuarantined(CharacterStateSnapshot snapshot) {
+        if (!pipelineFeatures.isCredibility()) {
+            return false;
+        }
+        return AssertionType.parse(snapshot.getAssertionType()) != AssertionType.FACT;
+    }
+
+    /** 事件入账：LLM 结构化偏移映射为 TimeNormalization.Offset（代码做日历运算） */
+    private void recordEvents(List<EventExtraction> events, Long bookId, Long chapterId) {
+        if (events == null || events.isEmpty()) {
+            return;
+        }
+        for (EventExtraction event : events) {
+            if (event == null || event.getEventDesc() == null || event.getEventDesc().isBlank()) {
+                continue;
+            }
+            try {
+                eventTimelineService.recordEvent(bookId, chapterId, null,
+                        event.getNarrativeMode(),
+                        toOffset(event),
+                        event.getTimeLabel(),
+                        chapterId,
+                        event.getEventDesc(),
+                        event.getLocation(),
+                        event.getParticipants());
+            } catch (Exception e) {
+                // 单事件失败不拖累整章结算（时间线是校验数据源，缺失时可退化偏序校验）
+                log.warn("事件入账失败（跳过该事件）: bookId={}, event={}", bookId, event.getEventDesc());
+            }
+        }
+    }
+
+    /** 偏移映射：DAY_OFFSET/FUZZY/ABSOLUTE_LABEL -> Offset；其余（含缺 days）为 null=UNKNOWN 不猜值 */
+    private static TimeNormalization.Offset toOffset(EventExtraction event) {
+        String kind = event.getTimeKind() == null ? "" : event.getTimeKind().trim().toUpperCase();
+        return switch (kind) {
+            case "DAY_OFFSET" -> event.getDays() == null ? null
+                    : TimeNormalization.Offset.dayOffset(event.getDays());
+            case "FUZZY" -> event.getDays() == null ? null
+                    : TimeNormalization.Offset.fuzzy(event.getDays());
+            case "ABSOLUTE_LABEL" -> TimeNormalization.Offset.absoluteLabel(event.getTimeLabel());
+            default -> null;
+        };
     }
 
     // ------------------------------------------------------------------

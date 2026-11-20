@@ -4,7 +4,9 @@ import com.linpj.novel.create.agent.ExtractionAgent;
 import com.linpj.novel.create.config.PipelineExtractionProperties;
 import com.linpj.novel.create.config.PipelineFeatures;
 import com.linpj.novel.create.pojo.pipeline.AliveStatus;
+import com.linpj.novel.create.pojo.pipeline.ChapterExtraction;
 import com.linpj.novel.create.pojo.pipeline.CharacterStateSnapshot;
+import com.linpj.novel.create.pojo.pipeline.EventExtraction;
 import com.linpj.novel.create.service.CharacterCardsService;
 import com.linpj.novel.create.service.CharacterStateService;
 import com.linpj.novel.create.service.PlotThreadService;
@@ -56,6 +58,8 @@ class ChapterFinalizeServiceTest {
     @Mock private ValueOperations<String, Object> valueOperations;
     @Mock private WikiConflictService wikiConflictService;
     @Mock private StateHistoryService stateHistoryService;
+    @Mock private PendingAssertionService pendingAssertionService;
+    @Mock private EventTimelineService eventTimelineService;
 
     private ChapterFinalizeService service;
     private PipelineExtractionProperties extractionProperties;
@@ -67,7 +71,8 @@ class ChapterFinalizeServiceTest {
         extractionProperties.setConfidenceThreshold(0.6);
         service = new ChapterFinalizeService(extractionAgent, storyDigestService,
                 characterStateService, plotThreadService, characterCardsService, redisTemplate,
-                extractionProperties, pipelineFeatures, wikiConflictService, stateHistoryService);
+                extractionProperties, pipelineFeatures, wikiConflictService, stateHistoryService,
+                pendingAssertionService, eventTimelineService);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
@@ -84,11 +89,21 @@ class ChapterFinalizeServiceTest {
         return snapshot;
     }
 
+    private ChapterExtraction extraction(List<CharacterStateSnapshot> snapshots) {
+        ChapterExtraction extraction = new ChapterExtraction();
+        extraction.setSnapshots(snapshots);
+        extraction.setEvents(List.of());
+        return extraction;
+    }
+
+    private ExtractionAgent.ExtractionResult extractionResult(List<CharacterStateSnapshot> snapshots) {
+        return new ExtractionAgent.ExtractionResult(extraction(snapshots), 80L);
+    }
+
     private void stubExtraction(List<CharacterStateSnapshot> snapshots) {
         when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
         when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("摘要");
-        when(extractionAgent.extractStates(any(), any()))
-                .thenReturn(new ExtractionAgent.ExtractionResult(snapshots, 80L));
+        when(extractionAgent.extractChapter(any(), any())).thenReturn(extractionResult(snapshots));
         when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
     }
 
@@ -97,8 +112,8 @@ class ChapterFinalizeServiceTest {
         when(valueOperations.get(anyString())).thenReturn(null);
         when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
         when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("摘要");
-        when(extractionAgent.extractStates(any(), any())).thenReturn(new ExtractionAgent.ExtractionResult(
-                List.of(snapshot(1L, 0.3), snapshot(2L, 0.9), snapshot(3L, null)), 80L));
+        when(extractionAgent.extractChapter(any(), any())).thenReturn(extractionResult(
+                List.of(snapshot(1L, 0.3), snapshot(2L, 0.9), snapshot(3L, null))));
         when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
 
         service.finalizeChapter(1L, 10L, "第一章", "章节正文");
@@ -115,8 +130,8 @@ class ChapterFinalizeServiceTest {
         when(valueOperations.get(anyString())).thenReturn(null);
         when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
         when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("摘要");
-        when(extractionAgent.extractStates(any(), any())).thenReturn(new ExtractionAgent.ExtractionResult(
-                List.of(snapshot(1L, 0.7)), 80L));
+        when(extractionAgent.extractChapter(any(), any())).thenReturn(
+                extractionResult(List.of(snapshot(1L, 0.7))));
         when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
 
         service.finalizeChapter(1L, 10L, "第一章", "章节正文");
@@ -216,13 +231,88 @@ class ChapterFinalizeServiceTest {
         verify(characterStateService).updateState(eq(1L), eq(1L), eq(10L), any());
     }
 
+    // ------------------------------------------------------------------
+    // 断言可信度分级与事件入账（v2.0 M2-C6 / C2 承接）
+    // ------------------------------------------------------------------
+
+    @Test
+    void credibilityOn非FACT断言隔离不进权威层() {
+        pipelineFeatures.setCredibility(true);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        CharacterStateSnapshot hearsay = snapshot(1L);
+        hearsay.setAssertionType("HEARSAY");
+        CharacterStateSnapshot fact = snapshot(2L);
+        fact.setAssertionType("FACT");
+        stubExtraction(List.of(hearsay, fact));
+
+        service.finalizeChapter(1L, 10L, "第一章", "章节正文");
+
+        // HEARSAY 隔离待证实区；FACT 照常入账
+        verify(characterStateService, never()).updateState(eq(1L), eq(1L), anyLong(), any());
+        verify(pendingAssertionService).record(eq(1L), eq(10L), eq(1L), eq("HEARSAY"), any());
+        verify(characterStateService).updateState(eq(1L), eq(2L), eq(10L), any());
+        // credibility 开启时执行 30 章过期清扫
+        verify(pendingAssertionService).expireOutdated(1L, 10L);
+    }
+
+    @Test
+    void credibilityOff非FACT标签照常入账为现状行为() {
+        when(valueOperations.get(anyString())).thenReturn(null);
+        CharacterStateSnapshot hearsay = snapshot(1L);
+        hearsay.setAssertionType("HEARSAY");
+        stubExtraction(List.of(hearsay));
+
+        service.finalizeChapter(1L, 10L, "第一章", "章节正文");
+
+        // 关开关（默认）：标签被忽略，全部按现状入账；不产生隔离与清扫
+        verify(characterStateService).updateState(eq(1L), eq(1L), eq(10L), any());
+        verify(pendingAssertionService, never()).record(anyLong(), anyLong(), anyLong(), anyString(), any());
+        verify(pendingAssertionService, never()).expireOutdated(anyLong(), anyLong());
+    }
+
+    @Test
+    void 事件入账调用时间线并做偏移映射() {
+        pipelineFeatures.setCredibility(true);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
+        when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("摘要");
+        EventExtraction relative = new EventExtraction();
+        relative.setEventDesc("林砚抵达王都");
+        relative.setLocation("王都");
+        relative.setParticipants(List.of(1L));
+        relative.setNarrativeMode("NORMAL");
+        relative.setTimeKind("DAY_OFFSET");
+        relative.setDays(3);
+        EventExtraction noTime = new EventExtraction();
+        noTime.setEventDesc("顾昭拜会旧友");
+        noTime.setTimeKind(null);
+        ChapterExtraction extraction = new ChapterExtraction();
+        extraction.setSnapshots(List.of());
+        extraction.setEvents(java.util.Arrays.asList(relative, noTime));
+        when(extractionAgent.extractChapter(any(), any()))
+                .thenReturn(new ExtractionAgent.ExtractionResult(extraction, 80L));
+        when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
+
+        service.finalizeChapter(1L, 10L, "第一章", "章节正文");
+
+        // DAY_OFFSET 映射为结构化偏移（时间运算在 TimeNormalization/时间线侧完成）
+        verify(eventTimelineService).recordEvent(eq(1L), eq(10L), org.mockito.ArgumentMatchers.isNull(),
+                eq("NORMAL"), eq(TimeNormalization.Offset.dayOffset(3)),
+                org.mockito.ArgumentMatchers.isNull(), eq(10L), eq("林砚抵达王都"), eq("王都"), eq(List.of(1L)));
+        // 无时间信息：偏移 null（UNKNOWN 语义），事件仍入账供偏序校验
+        verify(eventTimelineService).recordEvent(eq(1L), eq(10L), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.isNull(), eq(10L), eq("顾昭拜会旧友"),
+                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull());
+    }
+
     @Test
     void finalizeChapterUpdatesDigestAndCharacterStates() {
         when(valueOperations.get(anyString())).thenReturn(null);
         when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of("新伏笔"));
         when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("滚动摘要");
-        when(extractionAgent.extractStates(any(), any()))
-                .thenReturn(new ExtractionAgent.ExtractionResult(List.of(snapshot(1L), snapshot(2L)), 80L));
+        when(extractionAgent.extractChapter(any(), any()))
+                .thenReturn(extractionResult(List.of(snapshot(1L), snapshot(2L))));
         when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
 
         service.finalizeChapter(1L, 10L, "第一章", "章节正文");
@@ -248,6 +338,7 @@ class ChapterFinalizeServiceTest {
 
         // 内容 hash 未变化：跳过全部结算
         verify(extractionAgent, never()).rollUpDigest(any(), any(), any());
+        verify(extractionAgent, never()).extractChapter(any(), any());
         verify(storyDigestService, never()).saveDigest(anyLong(), anyLong(), anyString());
         verify(characterStateService, never()).updateState(anyLong(), anyLong(), anyLong(), any());
     }
@@ -257,8 +348,7 @@ class ChapterFinalizeServiceTest {
         when(valueOperations.get(anyString())).thenThrow(new RuntimeException("Redis 不可用"));
         when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
         when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("滚动摘要");
-        when(extractionAgent.extractStates(any(), any()))
-                .thenReturn(new ExtractionAgent.ExtractionResult(List.of(), 80L));
+        when(extractionAgent.extractChapter(any(), any())).thenReturn(extractionResult(List.of()));
         when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
 
         assertDoesNotThrow(() -> service.finalizeChapter(1L, 10L, "第一章", "章节正文"));
