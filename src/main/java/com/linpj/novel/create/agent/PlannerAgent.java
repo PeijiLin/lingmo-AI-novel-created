@@ -72,7 +72,15 @@ public class PlannerAgent {
                    - PLANT 新埋伏笔时 threadId 留空，description 必填
                    - 没有伏笔操作时 plotOps 返回空数组
                 4. 章节大纲要与前情摘要自然衔接，不重复已发生的情节。
-                5. 只输出 JSON，不要输出任何解释性文字或 Markdown 代码块标记。
+                5. 场景叙事模式（narrativeMode，默认 NORMAL 可省略）：
+                   - NORMAL：正常时间推进。
+                   - FLASHBACK：回忆/倒叙场景，必须同时给 flashbackTargetChapter（回忆目标章号）；
+                     状态按该时刻而非最新求解——回忆中人物的位置/伤势属于过去。
+                   - DREAM：梦境/幻觉场景（其中发生的事不写入事实账本）。
+                   - STORY_IN_STORY：戏中戏/书中书/他人转述场景。
+                   - UNRELIABLE：叙述性诡计场景。不得自行标注（预留作者手动声明）。
+                   依据明确才标注非 NORMAL；拿不准一律 NORMAL，宁可漏标不要错标。
+                6. 只输出 JSON，不要输出任何解释性文字或 Markdown 代码块标记。
                 """;
     }
 

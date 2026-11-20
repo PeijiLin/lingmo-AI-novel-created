@@ -23,4 +23,13 @@ public class Scene implements Serializable {
 
     /** 场景结果 */
     private String outcome;
+
+    /**
+     * 叙事模式（v2.0 设计 2.1，默认 NORMAL）：影响状态求解锚点与规则适用范围。
+     * UNRELIABLE 必须由作者显式声明；FLASHBACK 应同时给出 flashbackTargetChapter。
+     */
+    private NarrativeMode narrativeMode;
+
+    /** FLASHBACK 场景的回忆目标章号（状态按该章时刻求解；其余模式为空） */
+    private Long flashbackTargetChapter;
 }

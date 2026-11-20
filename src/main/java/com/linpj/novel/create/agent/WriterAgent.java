@@ -1,5 +1,6 @@
 package com.linpj.novel.create.agent;
 
+import com.linpj.novel.create.pojo.pipeline.NarrativeMode;
 import com.linpj.novel.create.pojo.pipeline.Scene;
 import com.linpj.novel.create.pojo.pipeline.WriterContext;
 import com.linpj.novel.create.pojo.pipeline.ChapterOutline;
@@ -223,7 +224,21 @@ public class WriterAgent {
                 Scene scene = scenes.get(i);
                 sb.append("场景").append(i + 1).append("：地点=").append(nullSafe(scene.getLocation(), "待定"))
                         .append("；冲突=").append(nullSafe(scene.getConflict(), "无"))
-                        .append("；结果=").append(nullSafe(scene.getOutcome(), "待写")).append("\n");
+                        .append("；结果=").append(nullSafe(scene.getOutcome(), "待写"));
+                // 叙事模式提示（v2.0 设计 2.1）：非 NORMAL 场景向 Writer 显式声明写作约束
+                NarrativeMode mode = scene.getNarrativeMode();
+                if (mode != null && mode != NarrativeMode.NORMAL) {
+                    sb.append("；叙事模式=").append(mode.name());
+                    if (mode == NarrativeMode.FLASHBACK) {
+                        sb.append("（第 ").append(scene.getFlashbackTargetChapter()).append(" 章的回忆，")
+                                .append("人物状态按当时情况描写，不得混入当前剧情信息）");
+                    } else if (mode == NarrativeMode.DREAM) {
+                        sb.append("（梦境/幻觉，可用超现实元素，不得影响后续真实剧情）");
+                    } else if (mode == NarrativeMode.STORY_IN_STORY) {
+                        sb.append("（戏中戏/转述，内容为嵌套故事）");
+                    }
+                }
+                sb.append("\n");
             }
         }
         return sb.toString();

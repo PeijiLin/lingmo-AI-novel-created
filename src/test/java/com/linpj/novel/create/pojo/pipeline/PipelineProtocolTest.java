@@ -52,6 +52,40 @@ class PipelineProtocolTest {
     }
 
     // ------------------------------------------------------------------
+    // Scene 叙事模式契约（v2.0 设计 2.1：JSON Schema 序列化往返）
+    // ------------------------------------------------------------------
+
+    @Test
+    void sceneNarrativeModeRoundTripsThroughJson() {
+        ChapterOutline outline = new ChapterOutline();
+        outline.setChapterTitle("第二十一章");
+
+        Scene flashback = new Scene();
+        flashback.setLocation("落霞谷");
+        flashback.setConflict("旧日重演");
+        flashback.setNarrativeMode(NarrativeMode.FLASHBACK);
+        flashback.setFlashbackTargetChapter(5L);
+
+        Scene dream = new Scene();
+        dream.setLocation("深渊");
+        dream.setConflict("心魔");
+        dream.setNarrativeMode(NarrativeMode.DREAM);
+
+        outline.setScenes(List.of(flashback, dream));
+        outline.setCharacterIds(List.of(1L));
+
+        // Planner 输出 -> JSON -> 反序列化（BeanOutputConverter 同一路径的契约保障）
+        String json = JsonUtil.toJson(outline);
+        ChapterOutline parsed = JsonUtil.fromJson(json, ChapterOutline.class);
+
+        assertEquals(NarrativeMode.FLASHBACK, parsed.getScenes().get(0).getNarrativeMode());
+        assertEquals(5L, parsed.getScenes().get(0).getFlashbackTargetChapter());
+        assertEquals(NarrativeMode.DREAM, parsed.getScenes().get(1).getNarrativeMode());
+        // 未标注场景默认 null（渲染与规则侧按 NORMAL 处理）
+        assertNull(parsed.getScenes().get(1).getFlashbackTargetChapter());
+    }
+
+    // ------------------------------------------------------------------
     // StageEvent 工厂与 SSE JSON 序列化
     // ------------------------------------------------------------------
 
