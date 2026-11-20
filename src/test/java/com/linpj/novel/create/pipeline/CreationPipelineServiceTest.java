@@ -84,7 +84,8 @@ class CreationPipelineServiceTest {
     void setUp() {
         service = new CreationPipelineService(writerAgent, criticAgent, plannerAgent,
                 polisherAgent, creationTaskService, artifactMapper, contextAssemblyService,
-                plotThreadService, outlineStoreService, creationEventProducer);
+                plotThreadService, outlineStoreService, creationEventProducer,
+                new com.linpj.novel.create.config.PipelineFeatures());
     }
 
     // ------------------------------------------------------------------

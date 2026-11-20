@@ -29,9 +29,11 @@ public class PlannerAgent {
     private final ChatClient chatClient;
     private final BeanOutputConverter<ChapterOutline> converter = new BeanOutputConverter<>(ChapterOutline.class);
 
-    public PlannerAgent(ChatModel chatModel) {
-        // 无记忆 ChatClient
-        this.chatClient = ChatClient.builder(chatModel).build();
+    public PlannerAgent(ChatModel chatModel, ModelCallLog modelCallLog) {
+        // 无记忆 ChatClient + 调用录制（禁用录制时为直通透传）
+        this.chatClient = ChatClient.builder(chatModel)
+                .defaultAdvisors(new ModelCallRecorder("PLANNER", modelCallLog))
+                .build();
     }
 
     /**

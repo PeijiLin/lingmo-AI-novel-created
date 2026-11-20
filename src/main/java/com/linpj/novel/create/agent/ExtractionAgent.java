@@ -33,8 +33,10 @@ public class ExtractionAgent {
             new BeanOutputConverter<>(new ParameterizedTypeReference<>() {
             });
 
-    public ExtractionAgent(ChatModel chatModel) {
-        this.chatClient = ChatClient.builder(chatModel).build();
+    public ExtractionAgent(ChatModel chatModel, ModelCallLog modelCallLog) {
+        this.chatClient = ChatClient.builder(chatModel)
+                .defaultAdvisors(new ModelCallRecorder("EXTRACTION", modelCallLog))
+                .build();
     }
 
     /**

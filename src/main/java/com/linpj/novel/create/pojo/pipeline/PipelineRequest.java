@@ -4,6 +4,7 @@ import com.linpj.novel.create.pojo.dto.AiChatRequest;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.util.Map;
 
 /**
  * 管道执行请求（由 AiChatRequest 派生，编排器唯一入参契约）
@@ -39,6 +40,9 @@ public class PipelineRequest implements Serializable {
     /** 重写轮数上限，默认 2，硬上限 3 */
     private int maxRewriteRounds = 2;
 
+    /** 机制开关请求级覆盖（null = 部署默认；仅已知键生效，见 PipelineFeatures.merged） */
+    private Map<String, Boolean> features;
+
     /** 由通用请求构建管道请求（mode/maxRewriteRounds 缺省走默认值） */
     public static PipelineRequest from(AiChatRequest request) {
         PipelineRequest pipelineRequest = new PipelineRequest();
@@ -56,6 +60,7 @@ public class PipelineRequest implements Serializable {
             // 硬上限 3：止损线不因入参放开
             pipelineRequest.setMaxRewriteRounds(Math.min(3, Math.max(1, request.getMaxRewriteRounds())));
         }
+        pipelineRequest.setFeatures(request.getFeatures());
         return pipelineRequest;
     }
 }

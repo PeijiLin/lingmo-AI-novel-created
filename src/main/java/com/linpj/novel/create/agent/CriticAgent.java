@@ -35,9 +35,12 @@ public class CriticAgent {
     private final RagAdvisorFactory ragAdvisorFactory;
     private final BeanOutputConverter<ReviewReport> converter = new BeanOutputConverter<>(ReviewReport.class);
 
-    public CriticAgent(ChatModel chatModel, RagAdvisorFactory ragAdvisorFactory) {
-        // 无记忆 ChatClient：审查独立判定
-        this.chatClient = ChatClient.builder(chatModel).build();
+    public CriticAgent(ChatModel chatModel, RagAdvisorFactory ragAdvisorFactory, ModelCallLog modelCallLog) {
+        // 无记忆 ChatClient：审查独立判定；录制 advisor 置于最低优先级，
+        // 记录 RAG 检索增强后的最终 prompt（回放确定性依赖此顺序）
+        this.chatClient = ChatClient.builder(chatModel)
+                .defaultAdvisors(new ModelCallRecorder("CRITIC", modelCallLog))
+                .build();
         this.ragAdvisorFactory = ragAdvisorFactory;
     }
 

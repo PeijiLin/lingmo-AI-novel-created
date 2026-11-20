@@ -4,6 +4,7 @@ import com.linpj.novel.create.agent.CriticAgent;
 import com.linpj.novel.create.agent.PlannerAgent;
 import com.linpj.novel.create.agent.PolisherAgent;
 import com.linpj.novel.create.agent.WriterAgent;
+import com.linpj.novel.create.config.PipelineFeatures;
 import com.linpj.novel.create.mapper.novel.CreationStageArtifactMapper;
 import com.linpj.novel.create.pojo.entity.CreationStageArtifact;
 import com.linpj.novel.create.pojo.pipeline.AsyncCreationTaskMessage;
@@ -32,6 +33,7 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
@@ -83,6 +85,7 @@ public class CreationPipelineService {
     private final PlotThreadService plotThreadService;
     private final ChapterOutlineStoreService outlineStoreService;
     private final CreationEventProducer creationEventProducer;
+    private final PipelineFeatures pipelineFeatures;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -93,7 +96,8 @@ public class CreationPipelineService {
                                     ContextAssemblyService contextAssemblyService,
                                     PlotThreadService plotThreadService,
                                     ChapterOutlineStoreService outlineStoreService,
-                                    CreationEventProducer creationEventProducer) {
+                                    CreationEventProducer creationEventProducer,
+                                    PipelineFeatures pipelineFeatures) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -104,6 +108,7 @@ public class CreationPipelineService {
         this.plotThreadService = plotThreadService;
         this.outlineStoreService = outlineStoreService;
         this.creationEventProducer = creationEventProducer;
+        this.pipelineFeatures = pipelineFeatures;
     }
 
     // ------------------------------------------------------------------
@@ -116,7 +121,8 @@ public class CreationPipelineService {
     public Flux<ServerSentEvent<String>> run(PipelineRequest request) {
         validate(request);
         Long taskId = creationTaskService.createRunningTask(
-                request.getBookId(), request.getChapterId(), request.getMode().name());
+                request.getBookId(), request.getChapterId(), request.getMode().name(),
+                featureSnapshot(request));
         ProgressEmitter emitter = ProgressEmitter.create();
         return emitter.asFlux()
                 .doOnSubscribe(subscription -> PIPELINE_SCHEDULER.schedule(() -> {
@@ -589,6 +595,19 @@ public class CreationPipelineService {
         }
         // 重写轮数硬上限 3：止损线不因入参放开
         request.setMaxRewriteRounds(Math.min(3, request.getMaxRewriteRounds()));
+    }
+
+    /**
+     * 运行时机制开关快照（v2.0 设计 7.1：开关状态记进实验数据行）。
+     * 部署默认 + 请求级覆盖的合并结果随任务落 creation_task.params——
+     * 每条实验数据自带分组标签，避免后期分不清哪条数据是哪组。
+     */
+    private Map<String, Object> featureSnapshot(PipelineRequest request) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("mode", request.getMode().name());
+        snapshot.put("maxRewriteRounds", request.getMaxRewriteRounds());
+        snapshot.put("features", pipelineFeatures.merged(request.getFeatures()));
+        return snapshot;
     }
 
     /** 闭环产出：终稿 + 是否降级 */

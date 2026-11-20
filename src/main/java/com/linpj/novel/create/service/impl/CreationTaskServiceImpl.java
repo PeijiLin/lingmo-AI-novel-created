@@ -19,7 +19,7 @@ public class CreationTaskServiceImpl extends ServiceImpl<CreationTaskMapper, Cre
         implements CreationTaskService {
 
     @Override
-    public Long createRunningTask(Long bookId, Long chapterId, String mode) {
+    public Long createRunningTask(Long bookId, Long chapterId, String mode, Object params) {
         CreationTask task = new CreationTask();
         task.setBookId(bookId);
         task.setChapterId(chapterId);
@@ -27,6 +27,7 @@ public class CreationTaskServiceImpl extends ServiceImpl<CreationTaskMapper, Cre
         task.setStatus("RUNNING");
         task.setDegraded(false);
         task.setTotalTokens(0);
+        task.setParams(params);
         save(task);
         return task.getId();
     }

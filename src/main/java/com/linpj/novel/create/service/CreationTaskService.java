@@ -10,8 +10,8 @@ import com.linpj.novel.create.pojo.entity.CreationTask;
  */
 public interface CreationTaskService extends IService<CreationTask> {
 
-    /** 创建 RUNNING 任务记录（同步 SSE 模式），返回任务 ID */
-    Long createRunningTask(Long bookId, Long chapterId, String mode);
+    /** 创建 RUNNING 任务记录（同步 SSE 模式），携带管道入参快照（mode/轮数/机制开关），返回任务 ID */
+    Long createRunningTask(Long bookId, Long chapterId, String mode, Object params);
 
     /** 创建 PENDING 任务记录（异步 Kafka 模式，幂等栅栏初值），携带完整入参 */
     Long createPendingTask(Long bookId, Long chapterId, String mode, Object params);
