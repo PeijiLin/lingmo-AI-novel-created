@@ -1,6 +1,7 @@
 package com.linpj.novel.create.worldstate;
 
 import com.linpj.novel.create.agent.ExtractionAgent;
+import com.linpj.novel.create.config.PipelineExtractionProperties;
 import com.linpj.novel.create.pojo.pipeline.CharacterStateSnapshot;
 import com.linpj.novel.create.service.CharacterCardsService;
 import com.linpj.novel.create.service.CharacterStateService;
@@ -51,20 +52,62 @@ class ChapterFinalizeServiceTest {
     @Mock private ValueOperations<String, Object> valueOperations;
 
     private ChapterFinalizeService service;
+    private PipelineExtractionProperties extractionProperties;
 
     @BeforeEach
     void setUp() {
+        extractionProperties = new PipelineExtractionProperties();
+        extractionProperties.setConfidenceThreshold(0.6);
         service = new ChapterFinalizeService(extractionAgent, storyDigestService,
-                characterStateService, plotThreadService, characterCardsService, redisTemplate);
+                characterStateService, plotThreadService, characterCardsService, redisTemplate,
+                extractionProperties);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
     private CharacterStateSnapshot snapshot(Long characterId) {
+        return snapshot(characterId, 0.9);
+    }
+
+    private CharacterStateSnapshot snapshot(Long characterId, Double confidence) {
         CharacterStateSnapshot snapshot = new CharacterStateSnapshot();
         snapshot.setCharacterId(characterId);
         snapshot.setLocation("城墙");
         snapshot.setMindset("紧绷");
+        snapshot.setConfidence(confidence);
         return snapshot;
+    }
+
+    @Test
+    void lowConfidenceSnapshotIsQuarantined() {
+        when(valueOperations.get(anyString())).thenReturn(null);
+        when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
+        when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("摘要");
+        when(extractionAgent.extractStates(any(), any())).thenReturn(new ExtractionAgent.ExtractionResult(
+                List.of(snapshot(1L, 0.3), snapshot(2L, 0.9), snapshot(3L, null)), 80L));
+        when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
+
+        service.finalizeChapter(1L, 10L, "第一章", "章节正文");
+
+        // 低置信度不入权威层；达标与未声明均照常入账（迁移期宽松语义）
+        verify(characterStateService, never()).updateState(eq(1L), eq(1L), anyLong(), any());
+        verify(characterStateService).updateState(eq(1L), eq(2L), eq(10L), any());
+        verify(characterStateService).updateState(eq(1L), eq(3L), eq(10L), any());
+    }
+
+    @Test
+    void confidenceThresholdIsConfigurable() {
+        extractionProperties.setConfidenceThreshold(0.95);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
+        when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("摘要");
+        when(extractionAgent.extractStates(any(), any())).thenReturn(new ExtractionAgent.ExtractionResult(
+                List.of(snapshot(1L, 0.7)), 80L));
+        when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
+
+        service.finalizeChapter(1L, 10L, "第一章", "章节正文");
+
+        // 阈值调高后 0.7 被隔离：阈值待金标准校准（设计 2.5），门禁必须随之可调
+        verify(characterStateService, never()).updateState(anyLong(), anyLong(), anyLong(), any());
     }
 
     @Test

@@ -10,7 +10,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 人物动态状态服务实现
@@ -36,9 +38,26 @@ public class CharacterStateServiceImpl extends ServiceImpl<NovelCharacterStateMa
         StringBuilder sb = new StringBuilder();
         for (NovelCharacterState state : states) {
             sb.append("[角色#").append(state.getCharacterId()).append(" 当前状态] ")
-                    .append(JsonUtil.toJson(state.getState())).append("\n");
+                    .append(JsonUtil.toJson(stripAdminFields(state.getState()))).append("\n");
         }
         return sb.toString();
+    }
+
+    /**
+     * 剥离提示词不应暴露的管理字段（如抽取置信度 confidence）。
+     * 置信度仅用于账本审计与阈值门禁（设计 2.5），不进入创作上下文。
+     */
+    private static Object stripAdminFields(Object state) {
+        if (state instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((k, v) -> {
+                if (k != null && !k.equals("confidence")) {
+                    copy.put(String.valueOf(k), v);
+                }
+            });
+            return copy;
+        }
+        return state;
     }
 
     @Override

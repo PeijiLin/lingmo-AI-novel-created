@@ -29,4 +29,11 @@ public class CharacterStateSnapshot implements Serializable {
 
     /** 受伤/能力变化 */
     private String conditionChanges;
+
+    /**
+     * 抽取置信度（0.0–1.0，v2.0 设计 2.5 抽取质量护栏）：
+     * 基于正文表述明确程度的自评；低于 confidenceThreshold 的快照不进权威层（不入账，留审计日志）。
+     * null = 模型未声明（迁移期宽松处理：照常入账，日志提示）
+     */
+    private Double confidence;
 }

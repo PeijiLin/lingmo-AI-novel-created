@@ -1,7 +1,9 @@
 package com.linpj.novel.create.worldstate;
 
 import com.linpj.novel.create.agent.ExtractionAgent;
+import com.linpj.novel.create.config.PipelineExtractionProperties;
 import com.linpj.novel.create.pojo.pipeline.CharacterStateSnapshot;
+import com.linpj.novel.create.utils.JsonUtil;
 import com.linpj.novel.create.pojo.vo.CharacterCardsVo;
 import com.linpj.novel.create.service.CharacterCardsService;
 import com.linpj.novel.create.service.CharacterStateService;
@@ -46,19 +48,22 @@ public class ChapterFinalizeService {
     private final PlotThreadService plotThreadService;
     private final CharacterCardsService characterCardsService;
     private final RedisTemplate<String, Object> redisTemplate;
+    private final PipelineExtractionProperties extractionProperties;
 
     public ChapterFinalizeService(ExtractionAgent extractionAgent,
                                    StoryDigestService storyDigestService,
                                    CharacterStateService characterStateService,
                                    PlotThreadService plotThreadService,
                                    CharacterCardsService characterCardsService,
-                                   RedisTemplate<String, Object> redisTemplate) {
+                                   RedisTemplate<String, Object> redisTemplate,
+                                   PipelineExtractionProperties extractionProperties) {
         this.extractionAgent = extractionAgent;
         this.storyDigestService = storyDigestService;
         this.characterStateService = characterStateService;
         this.plotThreadService = plotThreadService;
         this.characterCardsService = characterCardsService;
         this.redisTemplate = redisTemplate;
+        this.extractionProperties = extractionProperties;
     }
 
     /**
@@ -92,12 +97,19 @@ public class ChapterFinalizeService {
                 storyDigestService.saveDigest(bookId, chapterId, digest.trim());
             }
 
-            // 2. 人物动态状态抽取 -> 增量维护 character_state
+            // 2. 人物动态状态抽取 -> 增量维护 character_state（v2.0 设计 2.5：低置信度不入权威层）
             ExtractionAgent.ExtractionResult result =
                     extractionAgent.extractStates(cleanContent, renderCharacterList(bookId));
             if (result.snapshots() != null) {
                 for (CharacterStateSnapshot snapshot : result.snapshots()) {
                     if (snapshot != null && snapshot.getCharacterId() != null) {
+                        if (isLowConfidence(snapshot)) {
+                            // 不入账（不进权威层）：快照内容进日志留审计，待人审队列（M1-B4/M3）接管为待审条目
+                            log.warn("低置信度抽取不入账（待人审）: bookId={}, chapterId={}, characterId={}, confidence={}, snapshot={}",
+                                    bookId, chapterId, snapshot.getCharacterId(), snapshot.getConfidence(),
+                                    JsonUtil.toJson(snapshot));
+                            continue;
+                        }
                         characterStateService.updateState(bookId, snapshot.getCharacterId(), chapterId, snapshot);
                     }
                 }
@@ -109,6 +121,19 @@ public class ChapterFinalizeService {
         } catch (Exception e) {
             log.error("章节定稿结算失败（不影响章节保存）: bookId={}, chapterId={}", bookId, chapterId, e);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 抽取置信度门禁（v2.0 设计 2.5）
+    // ------------------------------------------------------------------
+
+    /**
+     * 低置信度判定：显式低于阈值 → 不入权威层；null（模型未声明）→ 迁移期宽松照常入账。
+     * 与全链路哲学一致：宁可少记不可错记，但未声明不能阻断既有账本维护。
+     */
+    private boolean isLowConfidence(CharacterStateSnapshot snapshot) {
+        return snapshot.getConfidence() != null
+                && snapshot.getConfidence() < extractionProperties.getConfidenceThreshold();
     }
 
     // ------------------------------------------------------------------
