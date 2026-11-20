@@ -2,6 +2,8 @@ package com.linpj.novel.create.worldstate;
 
 import com.linpj.novel.create.agent.ExtractionAgent;
 import com.linpj.novel.create.config.PipelineExtractionProperties;
+import com.linpj.novel.create.config.PipelineFeatures;
+import com.linpj.novel.create.pojo.pipeline.AliveStatus;
 import com.linpj.novel.create.pojo.pipeline.CharacterStateSnapshot;
 import com.linpj.novel.create.utils.JsonUtil;
 import com.linpj.novel.create.pojo.vo.CharacterCardsVo;
@@ -19,6 +21,7 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 章节定稿结算服务（World State 账本维护入口）
@@ -49,6 +52,8 @@ public class ChapterFinalizeService {
     private final CharacterCardsService characterCardsService;
     private final RedisTemplate<String, Object> redisTemplate;
     private final PipelineExtractionProperties extractionProperties;
+    private final PipelineFeatures pipelineFeatures;
+    private final WikiConflictService wikiConflictService;
 
     public ChapterFinalizeService(ExtractionAgent extractionAgent,
                                    StoryDigestService storyDigestService,
@@ -56,7 +61,9 @@ public class ChapterFinalizeService {
                                    PlotThreadService plotThreadService,
                                    CharacterCardsService characterCardsService,
                                    RedisTemplate<String, Object> redisTemplate,
-                                   PipelineExtractionProperties extractionProperties) {
+                                   PipelineExtractionProperties extractionProperties,
+                                   PipelineFeatures pipelineFeatures,
+                                   WikiConflictService wikiConflictService) {
         this.extractionAgent = extractionAgent;
         this.storyDigestService = storyDigestService;
         this.characterStateService = characterStateService;
@@ -64,6 +71,8 @@ public class ChapterFinalizeService {
         this.characterCardsService = characterCardsService;
         this.redisTemplate = redisTemplate;
         this.extractionProperties = extractionProperties;
+        this.pipelineFeatures = pipelineFeatures;
+        this.wikiConflictService = wikiConflictService;
     }
 
     /**
@@ -110,7 +119,7 @@ public class ChapterFinalizeService {
                                     JsonUtil.toJson(snapshot));
                             continue;
                         }
-                        characterStateService.updateState(bookId, snapshot.getCharacterId(), chapterId, snapshot);
+                        applyStateWithArbitration(bookId, chapterId, snapshot);
                     }
                 }
             }
@@ -120,6 +129,47 @@ public class ChapterFinalizeService {
                     result.snapshots() == null ? 0 : result.snapshots().size());
         } catch (Exception e) {
             log.error("章节定稿结算失败（不影响章节保存）: bookId={}, chapterId={}", bookId, chapterId, e);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 正典冲突仲裁（v2.0 设计 6.4 / M1-B4：冲突不静默覆盖；ruleRouting 部署开关门控）
+    // ------------------------------------------------------------------
+
+    /**
+     * 快照入账前仲裁（首期落在生死硬字段）：
+     * - ALIVE->DEAD 自然演化（R1）：自动生效 + 冲突账本 AUTO_APPLIED 留痕
+     * - DEAD->ALIVE 死亡回退（R3）：旧状态保留、新快照不入账，PENDING_REVIEW 待作者仲裁——
+     *   复活流/写作错误二选一由人定夺，系统不擅改
+     * - ruleRouting 关闭（默认）：直接覆盖，行为与主线一致（现状语义）
+     * 其余字段变化（位置/心态等软信息）直接入账不记冲突，避免审计噪音。
+     */
+    private void applyStateWithArbitration(Long bookId, Long chapterId, CharacterStateSnapshot snapshot) {
+        Long characterId = snapshot.getCharacterId();
+        if (!pipelineFeatures.isRuleRouting()) {
+            characterStateService.updateState(bookId, characterId, chapterId, snapshot);
+            return;
+        }
+        AliveStatus previous = characterStateService
+                .findAliveStatuses(bookId, List.of(characterId))
+                .getOrDefault(characterId, AliveStatus.UNKNOWN);
+        AliveStatus incoming = snapshot.getAliveStatus() == null ? AliveStatus.UNKNOWN : snapshot.getAliveStatus();
+
+        if (previous == AliveStatus.DEAD && incoming == AliveStatus.ALIVE) {
+            // R3：死亡回退需作者授权——保留旧状态，新快照不入账（宁可阻塞入账也不把“复活”静默写进正典）
+            log.warn("死亡回退待审（不入账）: bookId={}, chapterId={}, characterId={}", bookId, chapterId, characterId);
+            wikiConflictService.record(bookId, chapterId, characterId,
+                    "RESURRECTION_REVIEW", previous.name(), incoming.name(), "PENDING_REVIEW",
+                    "抽取快照声明死亡角色存活，待作者仲裁：改文(REJECTED)或确认复活后人工生效(RESOLVED)");
+            return;
+        }
+
+        characterStateService.updateState(bookId, characterId, chapterId, snapshot);
+        if (previous == AliveStatus.ALIVE && incoming == AliveStatus.DEAD) {
+            // R1：自然演化自动生效，双向留痕可追溯
+            wikiConflictService.record(bookId, chapterId, characterId,
+                    "STATE_EVOLVE", previous.name(), incoming.name(), "AUTO_APPLIED",
+                    "剧情内自然演化，旧事实置失效自动生效");
         }
     }
 

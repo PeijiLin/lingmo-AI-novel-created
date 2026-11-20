@@ -2,6 +2,8 @@ package com.linpj.novel.create.worldstate;
 
 import com.linpj.novel.create.agent.ExtractionAgent;
 import com.linpj.novel.create.config.PipelineExtractionProperties;
+import com.linpj.novel.create.config.PipelineFeatures;
+import com.linpj.novel.create.pojo.pipeline.AliveStatus;
 import com.linpj.novel.create.pojo.pipeline.CharacterStateSnapshot;
 import com.linpj.novel.create.service.CharacterCardsService;
 import com.linpj.novel.create.service.CharacterStateService;
@@ -22,6 +24,7 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
@@ -29,6 +32,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -50,9 +54,11 @@ class ChapterFinalizeServiceTest {
     @Mock private CharacterCardsService characterCardsService;
     @Mock private RedisTemplate<String, Object> redisTemplate;
     @Mock private ValueOperations<String, Object> valueOperations;
+    @Mock private WikiConflictService wikiConflictService;
 
     private ChapterFinalizeService service;
     private PipelineExtractionProperties extractionProperties;
+    private final PipelineFeatures pipelineFeatures = new PipelineFeatures();
 
     @BeforeEach
     void setUp() {
@@ -60,7 +66,7 @@ class ChapterFinalizeServiceTest {
         extractionProperties.setConfidenceThreshold(0.6);
         service = new ChapterFinalizeService(extractionAgent, storyDigestService,
                 characterStateService, plotThreadService, characterCardsService, redisTemplate,
-                extractionProperties);
+                extractionProperties, pipelineFeatures, wikiConflictService);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
@@ -75,6 +81,14 @@ class ChapterFinalizeServiceTest {
         snapshot.setMindset("紧绷");
         snapshot.setConfidence(confidence);
         return snapshot;
+    }
+
+    private void stubExtraction(List<CharacterStateSnapshot> snapshots) {
+        when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
+        when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("摘要");
+        when(extractionAgent.extractStates(any(), any()))
+                .thenReturn(new ExtractionAgent.ExtractionResult(snapshots, 80L));
+        when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
     }
 
     @Test
@@ -108,6 +122,97 @@ class ChapterFinalizeServiceTest {
 
         // 阈值调高后 0.7 被隔离：阈值待金标准校准（设计 2.5），门禁必须随之可调
         verify(characterStateService, never()).updateState(anyLong(), anyLong(), anyLong(), any());
+    }
+
+    // ------------------------------------------------------------------
+    // 正典冲突仲裁（v2.0 M1-B4：R1 自动生效留痕 / R3 死亡回退待审）
+    // ------------------------------------------------------------------
+
+    @Test
+    void ruleRoutingOnNaturalEvolutionAutoAppliesAndRecords() {
+        pipelineFeatures.setRuleRouting(true);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        CharacterStateSnapshot dying = snapshot(1L);
+        dying.setAliveStatus(AliveStatus.DEAD);
+        stubExtraction(List.of(dying));
+        when(characterStateService.findAliveStatuses(eq(1L), any()))
+                .thenReturn(Map.of(1L, AliveStatus.ALIVE));
+
+        service.finalizeChapter(1L, 10L, "第一章", "章节正文");
+
+        // R1：自然演化自动生效 + 双向留痕
+        verify(characterStateService).updateState(eq(1L), eq(1L), eq(10L), any());
+        verify(wikiConflictService).record(eq(1L), eq(10L), eq(1L),
+                eq("STATE_EVOLVE"), eq("ALIVE"), eq("DEAD"), eq("AUTO_APPLIED"), anyString());
+    }
+
+    @Test
+    void ruleRoutingOnResurrectionIsHeldForReview() {
+        pipelineFeatures.setRuleRouting(true);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        CharacterStateSnapshot aliveAgain = snapshot(1L);
+        aliveAgain.setAliveStatus(AliveStatus.ALIVE);
+        stubExtraction(List.of(aliveAgain));
+        when(characterStateService.findAliveStatuses(eq(1L), any()))
+                .thenReturn(Map.of(1L, AliveStatus.DEAD));
+
+        service.finalizeChapter(1L, 10L, "第一章", "章节正文");
+
+        // R3：死而复生不入账（保留旧 DEAD），待人审仲裁
+        verify(characterStateService, never()).updateState(anyLong(), anyLong(), anyLong(), any());
+        verify(wikiConflictService).record(eq(1L), eq(10L), eq(1L),
+                eq("RESURRECTION_REVIEW"), eq("DEAD"), eq("ALIVE"), eq("PENDING_REVIEW"), anyString());
+    }
+
+    @Test
+    void ruleRoutingOffResurrectionKeepsLegacyOverwriteBehavior() {
+        when(valueOperations.get(anyString())).thenReturn(null);
+        CharacterStateSnapshot aliveAgain = snapshot(1L);
+        aliveAgain.setAliveStatus(AliveStatus.ALIVE);
+        stubExtraction(List.of(aliveAgain));
+
+        service.finalizeChapter(1L, 10L, "第一章", "章节正文");
+
+        // 关开关（默认）：直接覆盖，不仲裁不记账——行为与主线一致
+        verify(characterStateService).updateState(eq(1L), eq(1L), eq(10L), any());
+        verify(wikiConflictService, never()).record(anyLong(), anyLong(), anyLong(),
+                anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void unknownPreviousStateAppliesWithoutConflictRecord() {
+        pipelineFeatures.setRuleRouting(true);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        CharacterStateSnapshot fresh = snapshot(1L);
+        fresh.setAliveStatus(AliveStatus.ALIVE);
+        stubExtraction(List.of(fresh));
+        when(characterStateService.findAliveStatuses(eq(1L), any()))
+                .thenReturn(Map.of(1L, AliveStatus.UNKNOWN));
+
+        service.finalizeChapter(1L, 10L, "第一章", "章节正文");
+
+        // 无先前状态（首章/旧数据）：UNKNOWN 不触发死亡回退，直接入账不记冲突（审计噪音控制）
+        verify(characterStateService).updateState(eq(1L), eq(1L), eq(10L), any());
+        verify(wikiConflictService, never()).record(anyLong(), anyLong(), anyLong(),
+                anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void conflictRecordFailureDoesNotBlockStateUpdate() {
+        pipelineFeatures.setRuleRouting(true);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        CharacterStateSnapshot dying = snapshot(1L);
+        dying.setAliveStatus(AliveStatus.DEAD);
+        stubExtraction(List.of(dying));
+        when(characterStateService.findAliveStatuses(eq(1L), any()))
+                .thenReturn(Map.of(1L, AliveStatus.ALIVE));
+        doThrow(new RuntimeException("账本库不可用"))
+                .when(wikiConflictService).record(anyLong(), anyLong(), anyLong(), anyString(),
+                        anyString(), anyString(), anyString(), anyString());
+
+        // 冲突记账是审计能力：故障不反阻塞状态入账
+        assertDoesNotThrow(() -> service.finalizeChapter(1L, 10L, "第一章", "章节正文"));
+        verify(characterStateService).updateState(eq(1L), eq(1L), eq(10L), any());
     }
 
     @Test

@@ -101,3 +101,21 @@ ALTER TABLE book_info ADD COLUMN IF NOT EXISTS world_setting TEXT;
 --   novel.creation.task      æ•´ç« /æ‰¹é‡ç”Ÿæˆå¼‚æ­¥ä»»åŠ¡
 --   novel.chapter.finalized  ç« èŠ‚å†…å®¹å®šç¨¿ï¼ˆæ‘˜è¦æ»šåŠ¨ + äººç‰©çŠ¶æ€æŠ½å–ï¼‰
 -- ---------------------------------------------------------------------------
+
+-- ³åÍ»ÖÙ²ÃÕË±¾£¨v2.0 Éè¼Æ 6.4£º³åÍ»²»¾²Ä¬¸²¸Ç£¬Ë«ÏòÁôºÛ£©
+-- R1 ×ÔÈ»ÑÝ»¯£¨Èç ALIVE->DEAD£©£º×Ô¶¯ÉúÐ§ + AUTO_APPLIED ÁôºÛ
+-- R3 ËÀÍö»ØÍË£¨DEAD->ALIVE£¬ÒÉËÆ¸´»î/Ð´×÷´íÎó£©£º¾É×´Ì¬±£Áô²»ÈëÕË£¬PENDING_REVIEW ´ý×÷ÕßÖÙ²Ã
+CREATE TABLE IF NOT EXISTS novel_wiki_conflict (
+    id            BIGSERIAL PRIMARY KEY,
+    book_id       BIGINT NOT NULL,
+    chapter_id    BIGINT,
+    character_id  BIGINT,
+    conflict_kind VARCHAR(30) NOT NULL,     -- STATE_EVOLVE / RESURRECTION_REVIEW
+    old_value     VARCHAR(100),
+    new_value     VARCHAR(100),
+    status        VARCHAR(30) NOT NULL,     -- AUTO_APPLIED / PENDING_REVIEW / RESOLVED / REJECTED
+    note          TEXT,
+    created_at    TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    resolved_at   TIMESTAMP WITH TIME ZONE
+);
+CREATE INDEX IF NOT EXISTS idx_wiki_conflict_book_status ON novel_wiki_conflict(book_id, status);
