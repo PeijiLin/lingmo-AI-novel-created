@@ -2,8 +2,11 @@ package com.linpj.novel.create.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.linpj.novel.create.pojo.entity.NovelCharacterState;
+import com.linpj.novel.create.pojo.pipeline.AliveStatus;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * 人物动态状态服务（角色卡是静态设定，本表是随剧情推进的当前态）
@@ -22,4 +25,16 @@ public interface CharacterStateService extends IService<NovelCharacterState> {
      * 覆盖式更新某角色的当前状态（state 为自由结构：位置/心态/新获知信息/持有物品/受伤变化）
      */
     void updateState(Long bookId, Long characterId, Long chapterId, Object state);
+
+    /**
+     * 批量读取角色生死状态（B5 硬字段，RC-01 消费端）。
+     * 容错语义：无状态记录 / 旧数据无字段 / 值非法 → UNKNOWN（宁可 UNKNOWN 不误判）。
+     */
+    Map<Long, AliveStatus> findAliveStatuses(Long bookId, List<Long> characterIds);
+
+    /**
+     * 批量读取角色持有物名清单（B5 硬字段，RC-06 消费端）。
+     * 容错语义：无状态记录 / 旧数据无字段 → 空集。
+     */
+    Map<Long, Set<String>> findHeldItemNames(Long bookId, List<Long> characterIds);
 }

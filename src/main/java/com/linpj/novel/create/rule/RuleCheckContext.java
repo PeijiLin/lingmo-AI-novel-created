@@ -18,6 +18,9 @@ import java.util.Set;
 @Data
 public class RuleCheckContext implements Serializable {
 
+    /** 所属书籍（规则只读查询角色卡/状态表等账本数据用） */
+    private Long bookId;
+
     /** 校验时机 */
     private RuleStage stage;
 

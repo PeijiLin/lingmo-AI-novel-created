@@ -26,14 +26,6 @@ public class PovRule implements ConsistencyRule {
     /** 叙述层第一人称标记次数阈值：低于此值视为噪声不计违规 */
     static final int OCCURRENCE_THRESHOLD = 2;
 
-    /** 对白引号（中英文常用全部覆盖，成对剥除） */
-    private static final Pattern[] DIALOGUE_PATTERNS = {
-            Pattern.compile("“[^”]*”", Pattern.DOTALL),
-            Pattern.compile("「[^」]*」", Pattern.DOTALL),
-            Pattern.compile("『[^』]*』", Pattern.DOTALL),
-            Pattern.compile("\"[^\"]*\"", Pattern.DOTALL),
-    };
-
     /** 非人称"我"的白名单复合词/成语（叙述层合法出现） */
     private static final Pattern SAFE_COMPOUNDS = Pattern.compile(
             "自我|忘我|无我|本我|超我|真我|敌我|你我|我行我素|依然故我|时不我待|我武惟扬");
@@ -72,7 +64,7 @@ public class PovRule implements ConsistencyRule {
             // 第一人称校验需主角名信息，M2 叙事模式标注后扩展
             return List.of();
         }
-        String narration = stripDialogue(draft);
+        String narration = RuleTexts.stripDialogue(draft);
         String neutralized = SAFE_COMPOUNDS.matcher(narration).replaceAll("");
 
         List<String> hits = new ArrayList<>();
@@ -90,14 +82,5 @@ public class PovRule implements ConsistencyRule {
                 String.format("叙述层（对白外）出现第一人称标记 %d 处：%s", hits.size(), String.join("；", hits)),
                 "检查是否混入第一人称叙述，或未加引号的心声/书信片段",
                 false));
-    }
-
-    /** 剥离对白引号内容（未闭合引号整段保留——宁可多保留叙述文本也不误删叙述） */
-    private static String stripDialogue(String text) {
-        String result = text;
-        for (Pattern pattern : DIALOGUE_PATTERNS) {
-            result = pattern.matcher(result).replaceAll("");
-        }
-        return result;
     }
 }

@@ -559,6 +559,7 @@ public class CreationPipelineService {
                                          String draft, ChapterOutline outline) {
         try {
             RuleCheckContext context = RuleCheckContext.of(stage);
+            context.setBookId(request.getBookId());
             context.setDraft(draft);
             context.setOutline(outline);
             context.setTargetWordCount(request.getTargetWordCount());
