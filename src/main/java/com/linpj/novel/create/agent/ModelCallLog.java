@@ -7,8 +7,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -18,7 +16,6 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -86,35 +83,14 @@ public class ModelCallLog {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("ts", Instant.now().toString());
         map.put("agent", agent);
-        map.put("system", textOf(request, MessageType.SYSTEM));
-        map.put("user", textOf(request, MessageType.USER));
+        map.put("system", request == null ? null : PromptTexts.systemOf(request.prompt()));
+        map.put("user", request == null ? null : PromptTexts.userOf(request.prompt()));
         map.put("model", modelOf(response));
         map.put("tokens", response == null ? 0L : WriterAgent.usageOf(response.chatResponse()));
         map.put("response", response == null ? null : WriterAgent.extractText(response.chatResponse()));
         map.put("elapsedMs", elapsedMs);
         map.put("error", error == null ? null : error.toString());
         return map;
-    }
-
-    /** 按消息类型抽取 prompt 文本（记忆 advisor 注入的历史消息一并记录，多段以空行连接） */
-    private static String textOf(ChatClientRequest request, MessageType type) {
-        if (request == null || request.prompt() == null) {
-            return null;
-        }
-        List<Message> instructions = request.prompt().getInstructions();
-        if (instructions == null || instructions.isEmpty()) {
-            return null;
-        }
-        String joined = instructions.stream()
-                .filter(m -> m != null && m.getMessageType() == type && m.getText() != null)
-                .map(Message::getText)
-                .reduce((a, b) -> a + "\n\n" + b)
-                .orElse(null);
-        // 超长截断保护：单字段上限 64k 字符，极端长 prompt 不至于撑爆日志文件
-        if (joined != null && joined.length() > 64_000) {
-            return joined.substring(0, 64_000) + "...(truncated)";
-        }
-        return joined;
     }
 
     /** 模型标识（响应元数据；网关不回传时为 null） */
