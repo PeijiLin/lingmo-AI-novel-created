@@ -151,16 +151,15 @@ class ContextBudgetRegressionTest {
     }
 
     // ------------------------------------------------------------------
-    // TC-08：倒叙注入回归（待 M2-C3 三时间轴落地后启用）
+    // TC-08：倒叙注入回归 —— 已在 C3 落地，端到端断言见 StateHistoryServiceTest
+    //         .TC08_倒叙场景取回忆目标时刻的状态而非最新（含 covers 区间语义用例）
+    //         此处保留原骨架作流量入口说明：倒叙场景调用链为
+    //         outline 场景模式 FLASHBACK(目标章) -> StateHistoryService.solveState(at=目标章)
     // ------------------------------------------------------------------
 
     @Test
-    @Disabled("待 C3 三时间轴状态落地：现状 novel_character_state 仅有当前态快照，倒叙场景必然拿到最新状态——"
-            + "这正是 v2.0 排期决策要最先揭露的隐蔽缺陷（R-03）。C3 落地后本测试即为验收条件。")
+    @Disabled("覆盖位置已迁移：StateHistoryServiceTest.TC08_倒叙场景取回忆目标时刻的状态而非最新（C3 落地后启用）")
     void TC08_倒叙场景必须取回忆目标时刻的状态而非最新() {
-        // 场景：第 20 章为第 5 章的回忆篇；第 5 章时角色在"落霞谷"且重伤，
-        // 第 19 章末已到"王都"且伤愈。倒叙场景装配状态必须返回落霞谷+重伤。
-        // 断言：solveState(bookId, characterId, atNarrChapter=20, targetReferencedChapter=5)
-        //       返回的 location/condition 与第 5 章一致，与第 19 章不一致。
+        // 见 StateHistoryServiceTest —— 避免 C3/C4 两个测试文件重复维护同一验收
     }
 }

@@ -139,3 +139,18 @@ CREATE TABLE IF NOT EXISTS novel_event_timeline (
     created_at     TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_event_timeline_book ON novel_event_timeline(book_id, chapter_id);
+
+-- 人物状态事实账本（v2.0 设计 6.3：三时间轴之 T_narr 生效章区间，软失效不物理删除）
+-- 新事实入账时将旧事实 valid_to_chapter 置为新区间前章；倒叙/回溯按"回忆目标时刻"取快照。
+-- 当前态表 novel_character_state 保留为性能投影，本表为可回溯权威账本（可从本表重建投影）。
+CREATE TABLE IF NOT EXISTS novel_state_fact (
+    id                 BIGSERIAL PRIMARY KEY,
+    book_id            BIGINT NOT NULL,
+    character_id       BIGINT NOT NULL,
+    source_chapter     BIGINT,                 -- 快照来源章（T_narr）
+    valid_from_chapter BIGINT NOT NULL,
+    valid_to_chapter   BIGINT,                 -- null = 当前有效（软失效永不物理删除）
+    state              JSONB NOT NULL,
+    created_at         TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_state_fact_lookup ON novel_state_fact(book_id, character_id, valid_from_chapter);

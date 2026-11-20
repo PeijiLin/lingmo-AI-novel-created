@@ -54,6 +54,7 @@ public class ChapterFinalizeService {
     private final PipelineExtractionProperties extractionProperties;
     private final PipelineFeatures pipelineFeatures;
     private final WikiConflictService wikiConflictService;
+    private final StateHistoryService stateHistoryService;
 
     public ChapterFinalizeService(ExtractionAgent extractionAgent,
                                    StoryDigestService storyDigestService,
@@ -63,7 +64,8 @@ public class ChapterFinalizeService {
                                    RedisTemplate<String, Object> redisTemplate,
                                    PipelineExtractionProperties extractionProperties,
                                    PipelineFeatures pipelineFeatures,
-                                   WikiConflictService wikiConflictService) {
+                                   WikiConflictService wikiConflictService,
+                                   StateHistoryService stateHistoryService) {
         this.extractionAgent = extractionAgent;
         this.storyDigestService = storyDigestService;
         this.characterStateService = characterStateService;
@@ -73,6 +75,7 @@ public class ChapterFinalizeService {
         this.extractionProperties = extractionProperties;
         this.pipelineFeatures = pipelineFeatures;
         this.wikiConflictService = wikiConflictService;
+        this.stateHistoryService = stateHistoryService;
     }
 
     /**
@@ -148,6 +151,9 @@ public class ChapterFinalizeService {
         Long characterId = snapshot.getCharacterId();
         if (!pipelineFeatures.isRuleRouting()) {
             characterStateService.updateState(bookId, characterId, chapterId, snapshot);
+            if (pipelineFeatures.isTriTimeline()) {
+                stateHistoryService.appendFact(bookId, characterId, chapterId, snapshot);
+            }
             return;
         }
         AliveStatus previous = characterStateService
@@ -165,6 +171,10 @@ public class ChapterFinalizeService {
         }
 
         characterStateService.updateState(bookId, characterId, chapterId, snapshot);
+        if (pipelineFeatures.isTriTimeline()) {
+            // C3 三时间轴：投影入账同步追记事实账本（软失效旧区间，可回溯求解）
+            stateHistoryService.appendFact(bookId, characterId, chapterId, snapshot);
+        }
         if (previous == AliveStatus.ALIVE && incoming == AliveStatus.DEAD) {
             // R1：自然演化自动生效，双向留痕可追溯
             wikiConflictService.record(bookId, chapterId, characterId,

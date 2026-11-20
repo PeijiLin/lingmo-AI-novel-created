@@ -55,6 +55,7 @@ class ChapterFinalizeServiceTest {
     @Mock private RedisTemplate<String, Object> redisTemplate;
     @Mock private ValueOperations<String, Object> valueOperations;
     @Mock private WikiConflictService wikiConflictService;
+    @Mock private StateHistoryService stateHistoryService;
 
     private ChapterFinalizeService service;
     private PipelineExtractionProperties extractionProperties;
@@ -66,7 +67,7 @@ class ChapterFinalizeServiceTest {
         extractionProperties.setConfidenceThreshold(0.6);
         service = new ChapterFinalizeService(extractionAgent, storyDigestService,
                 characterStateService, plotThreadService, characterCardsService, redisTemplate,
-                extractionProperties, pipelineFeatures, wikiConflictService);
+                extractionProperties, pipelineFeatures, wikiConflictService, stateHistoryService);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
