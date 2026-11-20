@@ -119,3 +119,23 @@ CREATE TABLE IF NOT EXISTS novel_wiki_conflict (
     resolved_at   TIMESTAMP WITH TIME ZONE
 );
 CREATE INDEX IF NOT EXISTS idx_wiki_conflict_book_status ON novel_wiki_conflict(book_id, status);
+
+-- 事件时间线（v2.0 设计 6.3 三时间轴之 T_story：故事时间按"书内天数轴"归一化）
+-- LLM 只输出结构化偏移（数值+单位+参照），代码做日历运算（公理 P3 分工，幻觉高发区不让 LLM 算）
+-- day_index：书内第 N 天（整数轴）；null = 时间不明（UNKNOWN/ABSOLUTE_LABEL），时序校验降级为偏序
+CREATE TABLE IF NOT EXISTS novel_event_timeline (
+    id             BIGSERIAL PRIMARY KEY,
+    book_id        BIGINT NOT NULL,
+    chapter_id     BIGINT,
+    scene_no       INTEGER,
+    narrative_mode VARCHAR(20) NOT NULL DEFAULT 'NORMAL',   -- NORMAL/FLASHBACK/DREAM/STORY_IN_STORY/UNRELIABLE（C4）
+    time_kind      VARCHAR(30) NOT NULL,     -- EXACT / RELATIVE_RESOLVED / FUZZY / UNKNOWN / ABSOLUTE_LABEL
+    day_index      INTEGER,                  -- T_story 归一化天数（null=不定）
+    raw_time_text  TEXT,                     -- 原文时间表述（"三天后夜晚"）
+    event_desc     TEXT NOT NULL,
+    location       VARCHAR(200),
+    participants   JSONB,
+    source_chapter BIGINT,
+    created_at     TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_event_timeline_book ON novel_event_timeline(book_id, chapter_id);

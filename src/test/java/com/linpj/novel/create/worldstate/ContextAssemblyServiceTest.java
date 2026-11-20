@@ -188,8 +188,14 @@ class ContextAssemblyServiceTest {
         assertTrue(context.getStoryDigest().length() <= 700);
         // 3. 超预算时历史伏笔最后裁掉
         assertNull(context.getActivePlotThreads());
-        // 出场角色卡与用户输入永不裁
-        assertEquals("字".repeat(7000), context.getWorldSetting());
+        // 4. 极端兜底（TC-01 修复）：裁完前三步仍超预算时，世界观设定硬截断到 2/5 预算
+        //    （旧行为 7000 字放行超预算 = 上下文膨胀缺陷，已修复）
+        assertNotNull(context.getWorldSetting());
+        assertTrue(context.getWorldSetting().startsWith("字"));
+        assertTrue(context.getWorldSetting().contains("已截断"),
+                "超限设定应带截断标记（完整版见书籍设定）");
+        assertTrue(context.getWorldSetting().length() <= 8000 * 2 / 5 + 30, "设定应压到预算 2/5");
+        // 用户输入永不裁
         assertEquals("继续写", context.getUserInput());
     }
 

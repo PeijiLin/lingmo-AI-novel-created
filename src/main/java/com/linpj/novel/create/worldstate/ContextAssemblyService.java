@@ -36,6 +36,12 @@ public class ContextAssemblyService {
     /** story_digest 截断保留长度（超预算时） */
     private static final int DIGEST_TRUNCATE_KEEP = 600;
 
+    /** 极端兜底：世界观设定硬上限（预算 2/5——超出部分对长篇是持续性 token 财务负担） */
+    private static final int WORLD_SETTING_HARD_CAP = CONTEXT_CHAR_BUDGET * 2 / 5;
+
+    /** 极端兜底：角色信息最小保留额度（创作基准不可压到零） */
+    private static final int CHARACTER_INFO_MIN_KEEP = 200;
+
     private final CharacterCardsService characterCardsService;
     private final BookInfoService bookInfoService;
     private final StoryDigestService storyDigestService;
@@ -208,6 +214,10 @@ public class ContextAssemblyService {
         // 3. 非出场角色：已在 loadCharacterInfo 按出场过滤，无可再裁（出场角色卡永不裁）
         // 4. 裁历史伏笔
         context.setActivePlotThreads(null);
+        // 5. 极端兜底（TC-01 回归修复：设定/角色集本身超预算时必须压住，
+        //    否则长篇的账本与卡池增长会让上下文无限膨胀）
+        worldSettingHardCap(context);
+        characterInfoHardCap(context, totalChars(context) - CONTEXT_CHAR_BUDGET);
     }
 
     /** Critic 上下文预算：待审正文与大纲为审查基准永不裁，其余同优先级裁剪 */
@@ -225,6 +235,9 @@ public class ContextAssemblyService {
         }
         // 无大纲时角色卡为全量事实基准，不裁；裁历史伏笔
         context.setActivePlotThreads(null);
+        // 极端兜底（同 Writer）
+        context.setWorldSetting(hardCap(context.getWorldSetting(), WORLD_SETTING_HARD_CAP));
+        characterInfoHardCap(context, totalChars(context) - CONTEXT_CHAR_BUDGET);
     }
 
     /** Planner 上下文预算：角色列表是 characterIds 的选择基准永不裁 */
@@ -242,6 +255,9 @@ public class ContextAssemblyService {
         }
         // 裁历史伏笔（角色列表为选择基准，永不裁）
         context.setActivePlotThreads(null);
+        // 极端兜底（同 Writer）
+        context.setWorldSetting(hardCap(context.getWorldSetting(), WORLD_SETTING_HARD_CAP));
+        characterInfoHardCap(context, totalChars(context) - CONTEXT_CHAR_BUDGET);
     }
 
     /** story_digest 截断（保留最近尾部；已短于保留长度时不变） */
@@ -250,6 +266,52 @@ public class ContextAssemblyService {
             return digest;
         }
         return "……" + digest.substring(digest.length() - DIGEST_TRUNCATE_KEEP);
+    }
+
+    // ------------------------------------------------------------------
+    // 极端兜底硬上限（TC-01：设定/角色池本身超预算时必须压住，防长篇持续膨胀）
+    // ------------------------------------------------------------------
+
+    private void worldSettingHardCap(WriterContext context) {
+        context.setWorldSetting(hardCap(context.getWorldSetting(), WORLD_SETTING_HARD_CAP));
+    }
+
+    /** Writer 角色信息兜底截断（保头部：角色列表与出场状态在头部，头部是最重要信息） */
+    private void characterInfoHardCap(WriterContext context, int overflow) {
+        if (overflow <= 0) {
+            return;
+        }
+        int currentLen = len(context.getCharacterInfo());
+        context.setCharacterInfo(hardCap(context.getCharacterInfo(),
+                Math.max(currentLen - overflow, CHARACTER_INFO_MIN_KEEP)));
+    }
+
+    /** Critic/Planner 角色信息兜底截断 */
+    private void characterInfoHardCap(CriticContext context, int overflow) {
+        if (overflow <= 0) {
+            return;
+        }
+        int currentLen = len(context.getCharacterInfo());
+        context.setCharacterInfo(hardCap(context.getCharacterInfo(),
+                Math.max(currentLen - overflow, CHARACTER_INFO_MIN_KEEP)));
+    }
+
+    private void characterInfoHardCap(PlannerContext context, int overflow) {
+        if (overflow <= 0) {
+            return;
+        }
+        int currentLen = len(context.getCharacterInfo());
+        context.setCharacterInfo(hardCap(context.getCharacterInfo(),
+                Math.max(currentLen - overflow, CHARACTER_INFO_MIN_KEEP)));
+    }
+
+    /** 硬截断（保头部 + 截断标记；null/未超限原样返回） */
+    private static String hardCap(String text, int cap) {
+        if (text == null || text.length() <= cap || cap <= 0) {
+            return text;
+        }
+        String marker = "\n……(设定过长已截断，完整版见书籍设定)";
+        return text.substring(0, Math.max(0, cap - marker.length())) + marker;
     }
 
     private int totalChars(WriterContext context) {
