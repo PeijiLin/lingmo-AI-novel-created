@@ -27,12 +27,15 @@ import com.linpj.novel.create.rule.RuleExemptionService;
 import com.linpj.novel.create.rule.RuleSeverity;
 import com.linpj.novel.create.rule.RuleStage;
 import com.linpj.novel.create.rule.RuleViolation;
+import com.linpj.novel.create.security.FinalDraftGate;
+import com.linpj.novel.create.security.SensitiveTerms;
 import com.linpj.novel.create.service.ChapterOutlineStoreService;
 import com.linpj.novel.create.service.CreationTaskService;
 import com.linpj.novel.create.service.PlotThreadService;
 import com.linpj.novel.create.worldstate.ContextAssemblyService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -88,6 +91,9 @@ public class CreationPipelineService {
     /** 终稿采纳记录的 artifact 轮次标记（M3-D1：采纳轮次/回滚/未达标落账，区别于上述两类） */
     private static final int ADOPTED_ROUND = 96;
 
+    /** 定稿前安全 gate 的 artifact 轮次标记（M4-E3：命中/修复/人审队列留档） */
+    private static final int POST_GATE_ROUND = 95;
+
     /** 修订循环预算比（M3-D3：修订累计 token 超首写 40% 强制出循环；S10 校准前的相对口径） */
     private static final double REVISION_BUDGET_RATIO = 0.40;
 
@@ -107,6 +113,7 @@ public class CreationPipelineService {
     private final PipelineFeatures pipelineFeatures;
     private final RuleChecker ruleChecker;
     private final RuleExemptionService ruleExemptionService;
+    private final FinalDraftGate finalDraftGate;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -139,6 +146,30 @@ public class CreationPipelineService {
                                     PipelineFeatures pipelineFeatures,
                                     RuleChecker ruleChecker,
                                     RuleExemptionService ruleExemptionService) {
+        this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
+                contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
+                pipelineFeatures, ruleChecker, ruleExemptionService, null);
+    }
+
+    /**
+     * 生产装配（Spring 唯一注入点）：含定稿前安全 gate（M4-E3）。
+     * 安全层不可让渡（P6）：gate 恒装配，词表为空即命中恒为空，不存在关闭开关。
+     */
+    @Autowired
+    public CreationPipelineService(WriterAgent writerAgent,
+                                    CriticAgent criticAgent,
+                                    PlannerAgent plannerAgent,
+                                    PolisherAgent polisherAgent,
+                                    CreationTaskService creationTaskService,
+                                    CreationStageArtifactMapper artifactMapper,
+                                    ContextAssemblyService contextAssemblyService,
+                                    PlotThreadService plotThreadService,
+                                    ChapterOutlineStoreService outlineStoreService,
+                                    CreationEventProducer creationEventProducer,
+                                    PipelineFeatures pipelineFeatures,
+                                    RuleChecker ruleChecker,
+                                    RuleExemptionService ruleExemptionService,
+                                    FinalDraftGate finalDraftGate) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -152,6 +183,7 @@ public class CreationPipelineService {
         this.pipelineFeatures = pipelineFeatures;
         this.ruleChecker = ruleChecker;
         this.ruleExemptionService = ruleExemptionService;
+        this.finalDraftGate = finalDraftGate;
     }
 
     // ------------------------------------------------------------------
@@ -247,10 +279,16 @@ public class CreationPipelineService {
         creationTaskService.advanceStage(taskId, StageCode.WRITING.name());
         WriterContext writerContext = contextAssemblyService.assembleWriterContext(request, null);
         WriterAgent.WriteResult result = writeWithRetry(writerContext, emitter, null, null);
-        saveArtifact(taskId, StageCode.WRITING, 1, Map.of("text", result.text()), result.tokens());
+        // 定稿前安全 gate（M4-E3）：命中则修复式改写，改写稿整体重置客户端缓冲后重发
+        GatedDraft gated = gateBeforeFinalize(request, taskId, null, result.text());
+        if (gated.repaired()) {
+            emitter.emitStage(StageEvent.revision(StageCode.WRITING, 1));
+            emitter.emitContent(gated.text());
+        }
+        saveArtifact(taskId, StageCode.WRITING, 1, Map.of("text", gated.text()), result.tokens());
         usage.addTokens(result.tokens());
         usage.setStages(usage.getStages() + 1);
-        settlePlotLedger(request, result.text());
+        settlePlotLedger(request, gated.text());
         return false;
     }
 
@@ -261,7 +299,13 @@ public class CreationPipelineService {
     private boolean runStandard(PipelineRequest request, Long taskId, ProgressEmitter emitter,
                                 StageUsage usage, Map<String, Boolean> features) {
         DraftOutcome outcome = runWriterCriticLoop(request, taskId, emitter, usage, null, 1, 2, features);
-        settlePlotLedger(request, outcome.draft());
+        // 定稿前安全 gate（M4-E3）
+        GatedDraft gated = gateBeforeFinalize(request, taskId, null, outcome.draft());
+        if (gated.repaired()) {
+            emitter.emitStage(StageEvent.revision(StageCode.WRITING, Math.max(1, outcome.adoptedRound())));
+            emitter.emitContent(gated.text());
+        }
+        settlePlotLedger(request, gated.text());
         return outcome.degraded();
     }
 
@@ -445,15 +489,19 @@ public class CreationPipelineService {
             usage.setStages(usage.getStages() + 1);
             if (!verify.report().isApproved()) {
                 log.warn("Polisher 复核未通过，回退润色前原稿: {}", verify.report().getSummary());
+                // 定稿前安全 gate（M4-E3）：回退稿同样要过 gate（润色被否不等于原稿干净）
+                GatedDraft gated = gateBeforeFinalize(request, taskId, outline, draft);
                 // 回退：重置客户端内容缓冲后补发原稿（与 REFINED/PRECISE 择优回退同一协议语义）
                 emitter.emitStage(StageEvent.revision(StageCode.POLISHING, 1));
-                emitter.emitContent(draft);
+                emitter.emitContent(gated.text());
                 return true;
             }
+            // 定稿前安全 gate（M4-E3）：润色终稿定稿前过 gate，修复稿替换润色稿进入下方下发
+            GatedDraft gated = gateBeforeFinalize(request, taskId, outline, polishResult.text());
             // 复核通过：REVISION(POLISHING) 重置客户端缓冲（抹去 Writer 原稿）后下发润色终稿，
             // 避免原稿与终稿在 content 流中拼接重复
             emitter.emitStage(StageEvent.revision(StageCode.POLISHING, 1));
-            emitter.emitContent(polishResult.text());
+            emitter.emitContent(gated.text());
             return false;
         } catch (Exception e) {
             log.warn("Polisher 失败，降级采用原稿: {}", e.getMessage());
@@ -729,6 +777,71 @@ public class CreationPipelineService {
             merged.setApproved(false);
         }
         return merged;
+    }
+
+    // ------------------------------------------------------------------
+    // 定稿前安全 gate（M4-E3，POST 层）
+    // ------------------------------------------------------------------
+
+    /**
+     * 定稿前安全 gate（设计 4.6 安全三层 POST；P6 安全层不可让渡——不设开关）。
+     *
+     * 流程：词表扫描 → 无命中（落 PASS 记录，作为拦截率分母）→ 有命中则**修复式改写一次**
+     * （命中转成定向修订清单，复用 Writer 修订链路：只改表达、不动情节）→ 复查：
+     *   干净   → 采用修复稿（落 REWRITE）
+     *   仍命中 → 采用修复稿并进人审队列（落 MANUAL_REVIEW），**不阻断交付**
+     *
+     * 为什么不硬拒绝：词表只覆盖显式字面命中，硬拒绝的误杀成本由作者承担（评审 P2/D6）；
+     * 修复式改写 + 人审队列把"安全 vs 可用"的冲突交给人，而不是让词表替作者做决定。
+     * 故障策略：gate 自身异常一律退回原文（宁可放过不可改错），与 Critic/规则校验的降级语义一致。
+     *
+     * @param outline REFINED/PRECISE 传大纲供修复改写用；STANDARD/FAST 传 null
+     */
+    private GatedDraft gateBeforeFinalize(PipelineRequest request, Long taskId,
+                                          ChapterOutline outline, String draft) {
+        if (finalDraftGate == null || draft == null || draft.isBlank()) {
+            return new GatedDraft(draft, false);
+        }
+        try {
+            List<SensitiveTerms.Hit> hits = finalDraftGate.scan(draft);
+            if (hits.isEmpty()) {
+                finalDraftGate.recordPass(request.getBookId(), request.getChapterId(), draft.length());
+                return new GatedDraft(draft, false);
+            }
+            log.warn("定稿前词表命中，进入修复式改写: bookId={}, chapterId={}, hits={}",
+                    request.getBookId(), request.getChapterId(), FinalDraftGate.describe(hits));
+            WriterContext writerContext = contextAssemblyService.assembleWriterContext(request, outline);
+            WriterAgent.WriteResult repaired = writerAgent.rewrite(
+                    writerContext, draft, finalDraftGate.repairReport(hits), 1, chunk -> { });
+            List<SensitiveTerms.Hit> recheck = finalDraftGate.scan(repaired.text());
+            if (recheck.isEmpty()) {
+                finalDraftGate.recordRewrite(request.getBookId(), request.getChapterId(), hits,
+                        repaired.text().length());
+                saveArtifact(taskId, StageCode.WRITING, POST_GATE_ROUND,
+                        Map.of("action", FinalDraftGate.ACTION_REWRITE,
+                                "hits", FinalDraftGate.describe(hits),
+                                "text", repaired.text()), repaired.tokens());
+                return new GatedDraft(repaired.text(), true);
+            }
+            // 修复一次仍有命中：照常交付（不阻塞），同时进人审队列，由人决定删改/豁免/改词表
+            log.warn("修复式改写后仍命中，转人审队列: bookId={}, chapterId={}, hits={}",
+                    request.getBookId(), request.getChapterId(), FinalDraftGate.describe(recheck));
+            finalDraftGate.recordManualReview(request.getBookId(), request.getChapterId(), recheck,
+                    repaired.text().length());
+            saveArtifact(taskId, StageCode.WRITING, POST_GATE_ROUND,
+                    Map.of("action", FinalDraftGate.ACTION_MANUAL_REVIEW,
+                            "hits", FinalDraftGate.describe(recheck),
+                            "text", repaired.text()), repaired.tokens());
+            return new GatedDraft(repaired.text(), true);
+        } catch (Exception e) {
+            log.warn("定稿前 gate 故障，按原文交付: bookId={}, chapterId={}, cause={}",
+                    request.getBookId(), request.getChapterId(), e.getMessage());
+            return new GatedDraft(draft, false);
+        }
+    }
+
+    /** 定稿前 gate 结果：text=进入终稿的正文；repaired=正文是否被替换（调用方需 REVISION 重发） */
+    private record GatedDraft(String text, boolean repaired) {
     }
 
     // ------------------------------------------------------------------

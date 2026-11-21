@@ -85,6 +85,7 @@ class CreationPipelineServiceTest {
     @Mock private CreationEventProducer creationEventProducer;
     @Mock private RuleChecker ruleChecker;
     @Mock private com.linpj.novel.create.rule.RuleExemptionService ruleExemptionService;
+    @Mock private com.linpj.novel.create.security.SafetyAuditService safetyAudit;
 
     private CreationPipelineService service;
     private final com.linpj.novel.create.config.PipelineFeatures pipelineFeatures =
@@ -160,15 +161,30 @@ class CreationPipelineServiceTest {
 
     /** 订阅 run() 的 SSE 流并等待管道跑完，返回事件序列 */
     private List<ServerSentEvent<String>> runAndCollect(PipelineRequest req) throws Exception {
+        return runAndCollect(service, req);
+    }
+
+    private List<ServerSentEvent<String>> runAndCollect(CreationPipelineService svc, PipelineRequest req)
+            throws Exception {
         CopyOnWriteArrayList<ServerSentEvent<String>> sink = new CopyOnWriteArrayList<>();
         CountDownLatch latch = new CountDownLatch(1);
-        service.run(req).subscribe(sink::add, t -> latch.countDown(), latch::countDown);
+        svc.run(req).subscribe(sink::add, t -> latch.countDown(), latch::countDown);
         assertTrue(latch.await(60, TimeUnit.SECONDS), "SSE 事件流未在限时内结束");
         return sink;
     }
 
     private static final Type STRING_MAP = new TypeToken<Map<String, String>>() {
     }.getType();
+
+    /** 装好 E3 定稿 gate 的服务实例（词表用生产基线，审计打桩） */
+    private CreationPipelineService serviceWithGate() {
+        com.linpj.novel.create.security.FinalDraftGate gate = new com.linpj.novel.create.security.FinalDraftGate(
+                new com.linpj.novel.create.security.SensitiveTerms(), safetyAudit);
+        return new CreationPipelineService(writerAgent, criticAgent, plannerAgent, polisherAgent,
+                creationTaskService, artifactMapper, contextAssemblyService, plotThreadService,
+                outlineStoreService, creationEventProducer, pipelineFeatures, ruleChecker,
+                ruleExemptionService, gate);
+    }
 
     private static List<StageEvent> stageEvents(List<ServerSentEvent<String>> events) {
         return events.stream()
@@ -784,5 +800,116 @@ class CreationPipelineServiceTest {
                 .filter(s -> "COMPLETED".equals(s.getCode())).findFirst().orElseThrow();
         assertNotNull(completed.getUsage());
         assertEquals(1, completed.getUsage().getStages());
+    }
+
+    // ------------------------------------------------------------------
+    // 定稿前安全 gate（M4-E3：POST 层，修复式改写 + 人审队列）
+    // ------------------------------------------------------------------
+
+    /** 词表命中 → 修复式改写一次 → 修复稿进终稿，并以 REVISION 重置客户端缓冲重发 */
+    @Test
+    void gateRepairsHitBeforeFinalizeAndReEmits() throws Exception {
+        stubWriterContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("他被肢解了", 100L));
+        when(writerAgent.rewrite(any(), contains("肢解"), any(), eq(1), any()))
+                .thenReturn(new WriterAgent.WriteResult("他战死了", 80L));
+
+        List<ServerSentEvent<String>> events = runAndCollect(serviceWithGate(), request(CreationMode.FAST));
+
+        assertTrue(stageEvents(events).stream().anyMatch(s ->
+                "WRITING".equals(s.getCode()) && "REVISION".equals(s.getStatus())), "修复稿需 REVISION 重发");
+        List<String> contents = contentTexts(events);
+        assertTrue(contents.contains("他战死了"), "应下发修复稿");
+        assertFalse(contents.contains("他被肢解了"), "命中初稿不得外发为终稿");
+        verify(safetyAudit).record(eq(1L), eq("POST"), eq("WORDLIST_VIOLENCE"), eq("REWRITE"),
+                contains("肢解(VIOLENCE)@2"));
+        verify(artifactMapper).insert(argThat((CreationStageArtifact a) ->
+                a.getRound() == 95 && "WRITING".equals(a.getStage())));
+        // SSE 路径 taskId 由 createRunningTask 生成，这里只校验完成语义（gate 不改变交付结果）
+        verify(creationTaskService).completeTask(any(), eq(false), anyInt(), anyLong());
+    }
+
+    /** 修复一次仍命中 → 照常交付（不阻塞）+ 人审队列落账 */
+    @Test
+    void gateEscalatesToManualReviewWhenRepairStillHits() throws Exception {
+        stubWriterContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("他被肢解了", 100L));
+        when(writerAgent.rewrite(any(), anyString(), any(), eq(1), any()))
+                .thenReturn(new WriterAgent.WriteResult("他仍被肢解", 70L));
+
+        List<ServerSentEvent<String>> events = runAndCollect(serviceWithGate(), request(CreationMode.FAST));
+
+        assertTrue(contentTexts(events).contains("他仍被肢解"), "人审挂起不等于阻断交付");
+        verify(safetyAudit).record(eq(1L), eq("POST"), eq("WORDLIST_VIOLENCE"), eq("MANUAL_REVIEW"), anyString());
+        // P6：安全告警不改变任务完成语义
+        verify(creationTaskService).completeTask(any(), eq(false), anyInt(), anyLong());
+    }
+
+    /** 无命中：不触发改写，仅落 PASS（拦截率分母） */
+    @Test
+    void gateLeavesCleanDraftUntouched() throws Exception {
+        stubWriterContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("夜色沉沉，城墙之外是营火。", 100L));
+
+        List<ServerSentEvent<String>> events = runAndCollect(serviceWithGate(), request(CreationMode.FAST));
+
+        verify(writerAgent, never()).rewrite(any(), anyString(), any(), anyInt(), any());
+        verify(safetyAudit).record(eq(1L), eq("POST"), eq("CLEAN"), eq("PASS"), contains("hits=[]"));
+        assertTrue(contentTexts(events).isEmpty(), "无改写则无需重发内容");
+    }
+
+    /** gate 自身故障（改写调用异常）→ 退回原文交付，不中断管道 */
+    @Test
+    void gateFailureFallsBackToOriginalDraft() {
+        stubWriterContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("他被肢解了", 100L));
+        when(writerAgent.rewrite(any(), anyString(), any(), anyInt(), any()))
+                .thenThrow(new RuntimeException("修订超时"));
+
+        serviceWithGate().runAsync(1L, request(CreationMode.FAST));
+
+        verify(creationTaskService).completeTask(eq(1L), eq(false), anyInt(), anyLong());
+        verify(safetyAudit, never()).record(any(), any(), any(), eq("MANUAL_REVIEW"), any());
+        verify(artifactMapper, never()).insert(argThat((CreationStageArtifact a) -> a.getRound() == 95));
+    }
+
+    /** STANDARD：闭环终稿同样在定稿前过 gate（不是只有 FAST 一条链路） */
+    @Test
+    void gateAppliesToStandardDraft() throws Exception {
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1 肢解", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(writerAgent.rewrite(any(), contains("肢解"), any(), eq(1), any()))
+                .thenReturn(new WriterAgent.WriteResult("d1 战死", 90L));
+
+        List<ServerSentEvent<String>> events = runAndCollect(serviceWithGate(), request(CreationMode.STANDARD));
+
+        assertTrue(contentTexts(events).contains("d1 战死"), "STANDARD 终稿应过 gate");
+        assertTrue(stageEvents(events).stream().anyMatch(s ->
+                "WRITING".equals(s.getCode()) && "REVISION".equals(s.getStatus())));
+    }
+
+    /** REFINED：润色终稿在定稿前过 gate（复核通过≠表达合规） */
+    @Test
+    void gateAppliesToPolishedDraft() throws Exception {
+        stubWriterContext();
+        stubCriticContext();
+        stubPlannerContext();
+        when(plannerAgent.plan(any())).thenReturn(new PlannerAgent.PlanResult(outline(), 80L));
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("原稿", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(polisherAgent.polish(anyString(), any(), any()))
+                .thenReturn(new PolisherAgent.PolishResult("润色稿肢解", 60L));
+        when(criticAgent.verifyPolish(any(), anyString()))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 9), 30L));
+        when(writerAgent.rewrite(any(), contains("肢解"), any(), eq(1), any()))
+                .thenReturn(new WriterAgent.WriteResult("润色稿战死", 50L));
+
+        List<ServerSentEvent<String>> events = runAndCollect(serviceWithGate(), request(CreationMode.REFINED));
+
+        List<String> contents = contentTexts(events);
+        assertTrue(contents.contains("润色稿战死"), "润色终稿应过 gate 后下发修复稿");
+        assertFalse(contents.contains("润色稿肢解"), "命中表达不得随润色稿下发");
     }
 }
