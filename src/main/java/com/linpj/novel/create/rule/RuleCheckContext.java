@@ -39,6 +39,15 @@ public class RuleCheckContext implements Serializable {
     /** 本书豁免的规则 ID（作者误报标记产物，D6 误报闭环写入；豁免即不检） */
     private Set<String> exemptedRules = new LinkedHashSet<>();
 
+    /** 当前章节（v2.0 M4-E5：区间保护/叙诡保护区按章判定；N3 可空 = 未知章节不做区间保护） */
+    private Long chapterId;
+
+    /** 区间内受保护的规则 ID（E5：命中只落 shadow 不阻塞，区间外照常拦截） */
+    private Set<String> protectedRules = new LinkedHashSet<>();
+
+    /** 本章是否处于叙诡保护区（大纲存在作者显式声明的 UNRELIABLE 场景） */
+    private boolean unreliableZone;
+
     public static RuleCheckContext of(RuleStage stage) {
         RuleCheckContext context = new RuleCheckContext();
         context.setStage(stage);

@@ -1,15 +1,15 @@
 -- ============================================================================
--- 多智能体创作流水线 DDL（novel_system 库）
+-- 多智能体创作流水�? DDL（novel_system 库）
 -- 对应设计文档：docs/MULTI_AGENT_CREATION_DESIGN.md
--- 阶段1：creation_task / creation_stage_artifact（任务与阶段产物落库 + token 埋点）
--- 阶段2：World State 账本四张表 + book_info.world_setting（服务端世界观唯一事实源）
+-- 阶段1：creation_task / creation_stage_artifact（任务与阶段产物落库 + token 埋点�?
+-- 阶段2：World State 账本四张�? + book_info.world_setting（服务端世界观唯�?事实源）
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
 -- 阶段1：创作任务与阶段产物
 -- ---------------------------------------------------------------------------
 
--- 创作任务（一次管道执行的记录，统计 token/耗时，为成本面板打底）
+-- 创作任务（一次管道执行的记录，统�? token/耗时，为成本面板打底�?
 CREATE TABLE IF NOT EXISTS creation_task (
     id            BIGSERIAL PRIMARY KEY,
     book_id       BIGINT,
@@ -31,14 +31,14 @@ ALTER TABLE creation_task ADD COLUMN IF NOT EXISTS params JSONB;
 CREATE INDEX IF NOT EXISTS idx_creation_task_book   ON creation_task(book_id);
 CREATE INDEX IF NOT EXISTS idx_creation_task_status ON creation_task(status);
 
--- 阶段产物（每阶段结构化产物实时落库，异常中断后产物仍在，支持基于 last artifact 续跑）
+-- 阶段产物（每阶段结构化产物实时落库，异常中断后产物仍在，支持基于 last artifact 续跑�?
 CREATE TABLE IF NOT EXISTS creation_stage_artifact (
     id         BIGSERIAL PRIMARY KEY,
     task_id    BIGINT       NOT NULL,
     stage      VARCHAR(30)  NOT NULL,               -- PLANNING / WRITING / CRITIC / POLISHING
-    round      INTEGER      NOT NULL DEFAULT 1,     -- 重写轮次（首轮=1）
+    round      INTEGER      NOT NULL DEFAULT 1,     -- 重写轮次（首�?=1�?
     artifact   JSONB        NOT NULL,               -- 结构化产物：outline / draft / review / polished
-    tokens     INTEGER,                             -- 本阶段 token 用量
+    tokens     INTEGER,                             -- 本阶�? token 用量
     elapsed_ms BIGINT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -46,10 +46,10 @@ CREATE TABLE IF NOT EXISTS creation_stage_artifact (
 CREATE INDEX IF NOT EXISTS idx_artifact_task ON creation_stage_artifact(task_id);
 
 -- ---------------------------------------------------------------------------
--- 阶段2：World State 账本（共享上下文，多 Agent 一致性靠账本而非模型记性）
+-- 阶段2：World State 账本（共享上下文，多 Agent �?致�?�靠账本而非模型记�?�）
 -- ---------------------------------------------------------------------------
 
--- 滚动前情摘要（book 级唯一，控制在 2000 字内）
+-- 滚动前情摘要（book 级唯�?，控制在 2000 字内�?
 CREATE TABLE IF NOT EXISTS novel_story_digest (
     book_id         BIGINT PRIMARY KEY,
     summary         TEXT NOT NULL,
@@ -57,18 +57,18 @@ CREATE TABLE IF NOT EXISTS novel_story_digest (
     updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- 章节大纲（Planner 产物，含修订版本）
+-- 章节大纲（Planner 产物，含修订版本�?
 CREATE TABLE IF NOT EXISTS novel_chapter_outline (
     id         BIGSERIAL PRIMARY KEY,
     book_id    BIGINT NOT NULL,
     chapter_id BIGINT,
-    outline    JSONB  NOT NULL,                     -- ChapterOutline 序列化
+    outline    JSONB  NOT NULL,                     -- ChapterOutline 序列�?
     version    INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_outline_book ON novel_chapter_outline(book_id);
 
--- 伏笔账本（核心资产：OPEN / RESOLVED / ABANDONED）
+-- 伏笔账本（核心资产：OPEN / RESOLVED / ABANDONED�?
 CREATE TABLE IF NOT EXISTS novel_plot_threads (
     id                  BIGSERIAL PRIMARY KEY,
     book_id             BIGINT NOT NULL,
@@ -81,25 +81,25 @@ CREATE TABLE IF NOT EXISTS novel_plot_threads (
 );
 CREATE INDEX IF NOT EXISTS idx_plot_threads_book_status ON novel_plot_threads(book_id, status);
 
--- 人物动态状态（角色卡是静态设定，这张是随剧情推进的当前态；book+character 唯一）
+-- 人物动�?�状态（角色卡是静�?�设定，这张是随剧情推进的当前�?�；book+character 唯一�?
 CREATE TABLE IF NOT EXISTS novel_character_state (
     id           BIGSERIAL PRIMARY KEY,
     book_id      BIGINT NOT NULL,
     character_id BIGINT NOT NULL,
-    chapter_id   BIGINT,                             -- 状态快照至哪章
-    state        JSONB  NOT NULL,                    -- {位置, 心态, 新获知信息, 持有物品, 受伤/能力变化}
+    chapter_id   BIGINT,                             -- 状�?�快照至哪章
+    state        JSONB  NOT NULL,                    -- {位置, 心�??, 新获知信�?, 持有物品, 受伤/能力变化}
     updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uk_char_state UNIQUE (book_id, character_id)
 );
 
--- 世界观唯一事实源：book_info 增加 world_setting 列（前端仍可传，仅作覆盖提示）
+-- 世界观唯�?事实源：book_info 增加 world_setting 列（前端仍可传，仅作覆盖提示�?
 ALTER TABLE book_info ADD COLUMN IF NOT EXISTS world_setting TEXT;
 
 -- ---------------------------------------------------------------------------
--- 阶段4：Kafka 异步任务依赖（幂等栅栏由 creation_task.status 承担，无需额外表）
+-- 阶段4：Kafka 异步任务依赖（幂等栅栏由 creation_task.status 承担，无�?额外表）
 -- topic 由应用启动时自动创建（KafkaConfig）：
 --   novel.creation.task      整章/批量生成异步任务
---   novel.chapter.finalized  章节内容定稿（摘要滚动 + 人物状态抽取）
+--   novel.chapter.finalized  章节内容定稿（摘要滚�? + 人物状�?�抽取）
 -- ---------------------------------------------------------------------------
 
 -- ��ͻ�ٲ��˱���v2.0 ��� 6.4����ͻ����Ĭ���ǣ�˫�����ۣ�
@@ -179,14 +179,18 @@ CREATE INDEX IF NOT EXISTS idx_pending_assertion_book ON novel_pending_assertion
 -- �����󱨻��⣨v2.0 M3-D6 �󱨱ջ������߱���� �� ��������� �� �ع鼯��
 -- ���⼴�ù���Ա��龲Ĭ�������嵥ͬʱ�ǹ������ʱ�������ܵĻع鼯����Դ
 CREATE TABLE IF NOT EXISTS novel_rule_exemption (
-    id         BIGSERIAL PRIMARY KEY,
-    book_id    BIGINT NOT NULL,
-    rule_id    VARCHAR(30) NOT NULL,
-    reason     TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    id           BIGSERIAL PRIMARY KEY,
+    book_id      BIGINT NOT NULL,
+    rule_id      VARCHAR(30) NOT NULL,
+    reason       TEXT,
+    chapter_from BIGINT,                     -- M4-E5 ��������ʼ�£��� chapter_to ͬΪ�� = �������⣩
+    chapter_to   BIGINT,                     -- M4-E5 �����������£������䣻������ֻ�澯��������
+    review_at    TIMESTAMP WITH TIME ZONE,   -- M4-E5 ���ڸ��ˣ�Ϊ�� = ������Ч�����ڱ�����ʧЧ��
+    created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uk_rule_exemption UNIQUE (book_id, rule_id)
 );
 CREATE INDEX IF NOT EXISTS idx_rule_exemption_book ON novel_rule_exemption(book_id);
+CREATE INDEX IF NOT EXISTS idx_rule_exemption_review ON novel_rule_exemption(review_at);
 
 -- ��ȫ����˱���v2.0 ��� 7.1/7.4���������ȫ����֤��������/��ɱ��˫ָ������Դ��
 -- ��Ҫ�أ�˭��book/user������Σ�layer+category+detail������δ��ã�action��

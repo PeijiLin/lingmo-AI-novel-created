@@ -17,6 +17,7 @@ import java.util.Set;
  * - OFF 规则不执行；SHADOW 规则违规进 result.shadow（永不阻塞）；
  *   ACTIVE 规则违规进 result.blocking（N5 由编排器决定局部重写）
  * - 豁免通道：context.exemptedRules 命中的规则完全跳过（作者误报标记，D6 闭环）
+ * - 保护区（E5）：context.unreliableZone 或 context.protectedRules 命中的规则只落 shadow（只告警不阻塞）
  * - 单规则异常降级为告警（failedRules 记录），不中断其余规则、不阻塞出章
  * - 时机过滤：规则按 stages() 与 context.stage 匹配后才执行
  *
@@ -71,8 +72,16 @@ public class RuleChecker {
             }
             // 分档与灰度分流（v2.0 M3-D5）：SHADOW 全影子；GRADUAL 按 bookId 分流
             // （偶数书籍阻塞/奇数书籍影子——同规则下双跑数据在线验证误报率）
-            boolean shadowOnly = status == RuleStatus.SHADOW
+            // 保护区（M4-E5）：章节区间保护或叙诡保护区内的违规一律降级为影子——只告警不阻塞，
+            // 否则"作者为了保住叙诡章只能整本关规则"，一致性拦截会随之全局失效。
+            boolean zoneProtected = protectedInZone(ruleId, context);
+            boolean shadowOnly = zoneProtected
+                    || status == RuleStatus.SHADOW
                     || (status == RuleStatus.GRADUAL && !blocksForBook(context));
+            if (zoneProtected) {
+                log.info("保护区降级（只告警）: ruleId={}, chapterId={}, unreliableZone={}",
+                        ruleId, context.getChapterId(), context.isUnreliableZone());
+            }
             for (RuleViolation violation : violations) {
                 violation.setShadow(shadowOnly);
                 if (shadowOnly) {
@@ -97,5 +106,13 @@ public class RuleChecker {
 
     private static boolean isExempted(String ruleId, RuleCheckContext context) {
         return context.getExemptedRules() != null && context.getExemptedRules().contains(ruleId);
+    }
+
+    /** 保护区：本章显式声明了叙诡（UNRELIABLE），或该规则被章节区间豁免覆盖 */
+    private static boolean protectedInZone(String ruleId, RuleCheckContext context) {
+        if (context.isUnreliableZone()) {
+            return true;
+        }
+        return context.getProtectedRules() != null && context.getProtectedRules().contains(ruleId);
     }
 }

@@ -20,6 +20,7 @@ import com.linpj.novel.create.pojo.pipeline.StageEvent;
 import com.linpj.novel.create.pojo.pipeline.StageUsage;
 import com.linpj.novel.create.pojo.pipeline.WriterContext;
 import com.linpj.novel.create.producer.CreationEventProducer;
+import com.linpj.novel.create.rule.NarrativeZone;
 import com.linpj.novel.create.rule.RuleCheckContext;
 import com.linpj.novel.create.rule.RuleCheckResult;
 import com.linpj.novel.create.rule.RuleChecker;
@@ -718,16 +719,26 @@ public class CreationPipelineService {
         try {
             RuleCheckContext context = RuleCheckContext.of(stage);
             context.setBookId(request.getBookId());
+            context.setChapterId(request.getChapterId());
             context.setDraft(draft);
             context.setOutline(outline);
             context.setTargetWordCount(request.getTargetWordCount());
             context.setPov(request.getPov());
+            // 叙诡保护区（E5）：只认大纲里作者显式声明（评审 N2），模型自由发挥不算
+            context.setUnreliableZone(NarrativeZone.declaresUnreliable(outline));
             // 误报豁免装配（M3-D6）：作者标记过的规则对本书静默；服务缺失/故障容忍为空集
             if (ruleExemptionService != null) {
                 try {
                     context.setExemptedRules(ruleExemptionService.listExemptedRules(request.getBookId()));
                 } catch (Exception e) {
                     log.warn("豁免清单加载失败（按无豁免继续）: bookId={}", request.getBookId());
+                }
+                try {
+                    // 区间保护（E5）：区间内只告警不阻塞，避免为保叙诡章而整本关规则
+                    context.setProtectedRules(ruleExemptionService.listProtectedRules(
+                            request.getBookId(), request.getChapterId()));
+                } catch (Exception e) {
+                    log.warn("保护区清单加载失败（按无保护区继续）: bookId={}", request.getBookId());
                 }
             }
             RuleCheckResult result = ruleChecker.check(context);

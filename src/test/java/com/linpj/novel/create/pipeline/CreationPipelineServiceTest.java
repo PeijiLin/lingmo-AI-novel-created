@@ -10,6 +10,7 @@ import com.linpj.novel.create.pojo.pipeline.ChapterOutline;
 import com.linpj.novel.create.pojo.pipeline.CreationMode;
 import com.linpj.novel.create.pojo.pipeline.CriticContext;
 import com.linpj.novel.create.pojo.pipeline.Issue;
+import com.linpj.novel.create.pojo.pipeline.NarrativeMode;
 import com.linpj.novel.create.pojo.pipeline.PipelineRequest;
 import com.linpj.novel.create.pojo.pipeline.PlannerContext;
 import com.linpj.novel.create.pojo.pipeline.ReviewReport;
@@ -57,6 +58,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -474,8 +476,44 @@ class CreationPipelineServiceTest {
         // mocked ruleChecker 返回阻塞但不影响断言目标（豁免判定在 RuleChecker 内部，此处验装配）
     }
 
-    /** 构造规则校验结果（executedRules 非空代表规则确有执行） */
-    private RuleCheckResult ruleResult(RuleViolation blocking) {
+    /**
+     * M4-E5：叙诡保护区装配——大纲显式 UNRELIABLE 场景 + 章节区间保护都要进 RuleCheckContext。
+     * 保护区判定本身在 RuleChecker/NarrativeZone 单测覆盖，此处只验"管线确实把保护区交下去了"
+     * （漏装配是本任务最容易出的回归：规则照样阻塞，作者只能整本关规则）。
+     */
+    @Test
+    void unreliableZoneAndRangeProtectionReachRuleContext() {
+        stubWriterContext();
+        stubCriticContext();
+        stubPlannerContext();
+        ChapterOutline unreliable = outline();
+        Scene reveal = new Scene();
+        reveal.setLocation("灵堂");
+        reveal.setConflict("主角自述与事实冲突");
+        reveal.setOutcome("读者被引向错误结论");
+        reveal.setNarrativeMode(NarrativeMode.UNRELIABLE);
+        unreliable.setScenes(List.of(unreliable.getScenes().get(0), reveal));
+        when(plannerAgent.plan(any())).thenReturn(new PlannerAgent.PlanResult(unreliable, 80L));
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("叙诡章正文", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(polisherAgent.polish(anyString(), any(), any()))
+                .thenReturn(new PolisherAgent.PolishResult("润色终稿", 60L));
+        when(criticAgent.verifyPolish(any(), anyString()))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 9), 30L));
+        when(ruleChecker.check(any())).thenReturn(ruleResult(null));
+        when(ruleExemptionService.listProtectedRules(1L, 10L)).thenReturn(java.util.Set.of("RC-01"));
+
+        PipelineRequest req = request(CreationMode.REFINED);
+        req.setFeatures(Map.of("ruleRouting", true));
+        service.runAsync(35L, req);
+
+        verify(ruleChecker, atLeastOnce()).check(argThat((RuleCheckContext ctx) ->
+                ctx.getChapterId() != null && ctx.getChapterId() == 10L
+                        && ctx.isUnreliableZone()
+                        && ctx.getProtectedRules() != null && ctx.getProtectedRules().contains("RC-01")));
+    }
+
+    /** 构造规则校验结果（executedRules 非空代表规则确有执行） */    private RuleCheckResult ruleResult(RuleViolation blocking) {
         RuleCheckResult result = new RuleCheckResult();
         result.markExecuted("RC-FAKE");
         if (blocking != null) {

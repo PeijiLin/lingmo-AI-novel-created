@@ -208,8 +208,7 @@ class RuleCheckerTest {
     }
 
     @Test
-    void GRADUAL灰度分流_偶数书籍阻塞奇数书籍影子() {
-        Map<String, String> status = new HashMap<>();
+    void GRADUAL灰度分流_偶数书籍阻塞奇数书籍影子() {        Map<String, String> status = new HashMap<>();
         status.put("RC-01", "GRADUAL");
         properties.setStatus(status);
         RuleChecker checker = checkerOf(new StubRule("RC-01", RuleSeverity.HIGH, List.of(RuleStage.DRAFT)));
@@ -230,5 +229,68 @@ class RuleCheckerTest {
         // 无书籍上下文：保守影子（数据缺失不引入阻塞）
         RuleCheckResult noBook = checker.check(draftContext());
         assertTrue(!noBook.hasBlocking());
+    }
+
+    // ----------------------------------------------------------------
+    // 叙诡保护区（M4-E5：保护区内只告警不阻塞）
+    // ----------------------------------------------------------------
+
+    @Test
+    void 区间保护的规则只落影子_不阻塞出章() {
+        Map<String, String> status = new HashMap<>();
+        status.put("RC-01", "ACTIVE");
+        properties.setStatus(status);
+        RuleChecker checker = checkerOf(new StubRule("RC-01", RuleSeverity.HIGH, List.of(RuleStage.DRAFT)));
+        RuleCheckContext context = draftContext();
+        context.setBookId(20L);
+        context.setChapterId(11L);
+        context.setProtectedRules(Set.of("RC-01")); // 作者声明 10..12 章为叙诡区间
+
+        RuleCheckResult result = checker.check(context);
+
+        assertEquals(1, result.getShadow().size(), "保护区内违规降级为影子");
+        assertTrue(result.getShadow().get(0).isShadow());
+        assertFalse(result.hasBlocking(), "保护区内不得阻塞出章（否则叙诡必被误杀）");
+        assertTrue(result.getExecutedRules().contains("RC-01"), "降级不等于不检查：仍要留下告警记录");
+    }
+
+    @Test
+    void 叙诡保护区内所有规则降级为影子() {
+        Map<String, String> status = new HashMap<>();
+        status.put("RC-01", "ACTIVE");
+        status.put("RC-02", "ACTIVE");
+        properties.setStatus(status);
+        RuleChecker checker = checkerOf(
+                new StubRule("RC-01", RuleSeverity.HIGH, List.of(RuleStage.DRAFT)),
+                new StubRule("RC-02", RuleSeverity.LOW, List.of(RuleStage.DRAFT)));
+        RuleCheckContext context = draftContext();
+        context.setBookId(20L);
+        context.setChapterId(7L);
+        context.setUnreliableZone(true); // 大纲显式声明 UNRELIABLE 场景
+
+        RuleCheckResult result = checker.check(context);
+
+        assertEquals(2, result.getShadow().size());
+        assertFalse(result.hasBlocking(), "不可靠叙述下的事实矛盾可能是作者故意的线索");
+        assertFalse(result.hasBlockingHigh());
+    }
+
+    @Test
+    void 保护区清单未命中的规则照常拦截() {
+        Map<String, String> status = new HashMap<>();
+        status.put("RC-01", "ACTIVE");
+        properties.setStatus(status);
+        RuleChecker checker = checkerOf(new StubRule("RC-01", RuleSeverity.HIGH, List.of(RuleStage.DRAFT)));
+
+        RuleCheckContext outside = draftContext();
+        outside.setBookId(20L);
+        outside.setChapterId(13L);
+        // 区间 10..12 由 RuleExemptionService 按章过滤：第 13 章装配出的是空集
+        outside.setProtectedRules(Set.of());
+
+        RuleCheckResult result = checker.check(outside);
+
+        assertTrue(result.hasBlockingHigh(), "区间外必须恢复拦截，否则保护区变成事实上的整本关闭");
+        assertTrue(result.getShadow().isEmpty());
     }
 }

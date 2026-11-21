@@ -33,5 +33,14 @@ public class NovelRuleExemption implements Serializable {
     /** 误报理由（豁免即回归样本，理由供规则调整时定位根因） */
     private String reason;
 
+    /** 保护区起始章（v2.0 M4-E5；为空且 chapterTo 为空 = 整本豁免，沿用 D6 语义） */
+    private Long chapterFrom;
+
+    /** 保护区结束章（闭区间；仅 chapterFrom 有值表示"该章起往后"） */
+    private Long chapterTo;
+
+    /** 到期复核时间（为空 = 长期有效；过期后保护区失效、规则恢复拦截，由人审队列提醒续期） */
+    private Date reviewAt;
+
     private Date createdAt;
 }
