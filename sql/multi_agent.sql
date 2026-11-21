@@ -187,3 +187,16 @@ CREATE TABLE IF NOT EXISTS novel_rule_exemption (
     CONSTRAINT uk_rule_exemption UNIQUE (book_id, rule_id)
 );
 CREATE INDEX IF NOT EXISTS idx_rule_exemption_book ON novel_rule_exemption(book_id);
+
+-- 安全审计账本（v2.0 设计 7.1/7.4：三层防线全量留证，拦截率/误杀率双指标数据源）
+-- 三要素：谁（book/user）、因何（layer+category+detail）、如何处置（action）
+CREATE TABLE IF NOT EXISTS novel_safety_log (
+    id         BIGSERIAL PRIMARY KEY,
+    book_id    BIGINT,
+    layer      VARCHAR(20) NOT NULL,     -- PRE / STREAM / POST（前置/中置/后置）
+    category   VARCHAR(40) NOT NULL,     -- PROMPT_INJECTION / SUSPECTED_INJECTION / CONSTRAINT_VIOLATION / ...
+    action     VARCHAR(20) NOT NULL,     -- REJECT / FLAG / REWRITE / PASS
+    detail     TEXT,                     -- 转义后的留证（控制符剥离 + 长度截断，防日志二次注入）
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_safety_log_book ON novel_safety_log(book_id, layer);

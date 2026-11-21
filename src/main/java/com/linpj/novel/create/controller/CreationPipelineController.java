@@ -2,12 +2,16 @@ package com.linpj.novel.create.controller;
 
 import com.linpj.novel.create.constant.BaseResponse;
 import com.linpj.novel.create.constant.ResultUtils;
+import com.linpj.novel.create.exception.BusinessException;
 import com.linpj.novel.create.exception.ErrorCode;
 import com.linpj.novel.create.exception.ThrowsUtils;
 import com.linpj.novel.create.pojo.dto.AiChatRequest;
 import com.linpj.novel.create.pojo.entity.CreationTask;
 import com.linpj.novel.create.pojo.pipeline.PipelineRequest;
 import com.linpj.novel.create.pipeline.CreationPipelineService;
+import com.linpj.novel.create.security.InputGuard;
+import com.linpj.novel.create.security.PrecheckVerdict;
+import com.linpj.novel.create.security.SafetyAuditService;
 import com.linpj.novel.create.service.CreationTaskService;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.http.MediaType;
@@ -35,11 +39,17 @@ public class CreationPipelineController {
 
     private final CreationPipelineService creationPipelineService;
     private final CreationTaskService creationTaskService;
+    private final InputGuard inputGuard;
+    private final SafetyAuditService safetyAuditService;
 
     public CreationPipelineController(CreationPipelineService creationPipelineService,
-                                        CreationTaskService creationTaskService) {
+                                        CreationTaskService creationTaskService,
+                                        InputGuard inputGuard,
+                                        SafetyAuditService safetyAuditService) {
         this.creationPipelineService = creationPipelineService;
         this.creationTaskService = creationTaskService;
+        this.inputGuard = inputGuard;
+        this.safetyAuditService = safetyAuditService;
     }
 
     /**
@@ -71,11 +81,29 @@ public class CreationPipelineController {
         return ResultUtils.success(task);
     }
 
+    /**
+     * 入口校验：参数完整性 + 前置防线（M4-E1：约束可满足性 + 注入模式，拒绝必给可行替代）。
+     * P6 不可让渡：前置防线在两个入口（同步/异步）均强制执行，无开关。
+     */
     private void validate(AiChatRequest request) {
         ThrowsUtils.throwIf(request == null, ErrorCode.PARAMS_ERROR);
         ThrowsUtils.throwIf(request.getBookId() == null || request.getBookId() <= 0,
                 ErrorCode.PARAMS_ERROR, "bookId 不能为空");
         ThrowsUtils.throwIf(StringUtils.isBlank(request.getUserInput()),
                 ErrorCode.PARAMS_ERROR, "userInput 不能为空");
+
+        PrecheckVerdict verdict = inputGuard.precheck(request);
+        if (verdict.blocked()) {
+            // P1 拒绝：留审计 + 拒绝信息附可行替代（拒绝必须给替代，不允许只说不行）
+            safetyAuditService.record(request.getBookId(), "PRE", verdict.category(), "REJECT",
+                    "reason=" + verdict.reason());
+            throw new BusinessException(ErrorCode.PARAMS_ERROR,
+                    verdict.reason() + "。可行替代：" + verdict.suggestion());
+        }
+        if (verdict.flagged()) {
+            // P2 疑似：放行 + 标记（拦截率/误杀率双指标的观测数据源）
+            safetyAuditService.record(request.getBookId(), "PRE", verdict.category(), "FLAG",
+                    "reason=" + verdict.reason());
+        }
     }
 }
