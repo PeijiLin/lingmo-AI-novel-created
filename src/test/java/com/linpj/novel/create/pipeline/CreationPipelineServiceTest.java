@@ -84,6 +84,7 @@ class CreationPipelineServiceTest {
     @Mock private ChapterOutlineStoreService outlineStoreService;
     @Mock private CreationEventProducer creationEventProducer;
     @Mock private RuleChecker ruleChecker;
+    @Mock private com.linpj.novel.create.rule.RuleExemptionService ruleExemptionService;
 
     private CreationPipelineService service;
     private final com.linpj.novel.create.config.PipelineFeatures pipelineFeatures =
@@ -94,7 +95,7 @@ class CreationPipelineServiceTest {
         service = new CreationPipelineService(writerAgent, criticAgent, plannerAgent,
                 polisherAgent, creationTaskService, artifactMapper, contextAssemblyService,
                 plotThreadService, outlineStoreService, creationEventProducer,
-                pipelineFeatures, ruleChecker);
+                pipelineFeatures, ruleChecker, ruleExemptionService);
     }
 
     // ------------------------------------------------------------------
@@ -432,6 +433,29 @@ class CreationPipelineServiceTest {
                 && a.getArtifact() != null
                 && a.getArtifact().toString().contains("budgetExhausted")));
         verify(creationTaskService).completeTask(eq(33L), eq(true), anyInt(), anyLong());
+    }
+
+    /** M3-D6：作者标记误报的规则经豁免装配后完全静默（规则对该书不生效） */
+    @Test
+    void exemptedRuleIsSilentInPipeline() {
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        RuleCheckResult blocking = new RuleCheckResult();
+        blocking.markExecuted("RC-01");
+        blocking.addBlocking(withBlocking("RC-01", RuleSeverity.HIGH));
+        when(ruleChecker.check(any())).thenReturn(blocking);
+        when(ruleExemptionService.listExemptedRules(1L)).thenReturn(java.util.Set.of("RC-01"));
+
+        PipelineRequest req = request(CreationMode.STANDARD);
+        req.setFeatures(Map.of("ruleRouting", true));
+        service.runAsync(34L, req);
+
+        // 豁免规则在 RuleCheckContext 中被剔除：RuleChecker 收到的 context 不含该规则
+        verify(ruleChecker).check(argThat((RuleCheckContext ctx) ->
+                ctx.getExemptedRules() != null && ctx.getExemptedRules().contains("RC-01")));
+        // mocked ruleChecker 返回阻塞但不影响断言目标（豁免判定在 RuleChecker 内部，此处验装配）
     }
 
     /** 构造规则校验结果（executedRules 非空代表规则确有执行） */

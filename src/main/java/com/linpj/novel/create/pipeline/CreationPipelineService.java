@@ -23,6 +23,7 @@ import com.linpj.novel.create.producer.CreationEventProducer;
 import com.linpj.novel.create.rule.RuleCheckContext;
 import com.linpj.novel.create.rule.RuleCheckResult;
 import com.linpj.novel.create.rule.RuleChecker;
+import com.linpj.novel.create.rule.RuleExemptionService;
 import com.linpj.novel.create.rule.RuleSeverity;
 import com.linpj.novel.create.rule.RuleStage;
 import com.linpj.novel.create.rule.RuleViolation;
@@ -105,6 +106,7 @@ public class CreationPipelineService {
     private final CreationEventProducer creationEventProducer;
     private final PipelineFeatures pipelineFeatures;
     private final RuleChecker ruleChecker;
+    private final RuleExemptionService ruleExemptionService;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -118,6 +120,25 @@ public class CreationPipelineService {
                                     CreationEventProducer creationEventProducer,
                                     PipelineFeatures pipelineFeatures,
                                     RuleChecker ruleChecker) {
+        this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
+                contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
+                pipelineFeatures, ruleChecker, null);
+    }
+
+    /** 完整构造（含误报豁免服务——D6 误报闭环装配） */
+    public CreationPipelineService(WriterAgent writerAgent,
+                                    CriticAgent criticAgent,
+                                    PlannerAgent plannerAgent,
+                                    PolisherAgent polisherAgent,
+                                    CreationTaskService creationTaskService,
+                                    CreationStageArtifactMapper artifactMapper,
+                                    ContextAssemblyService contextAssemblyService,
+                                    PlotThreadService plotThreadService,
+                                    ChapterOutlineStoreService outlineStoreService,
+                                    CreationEventProducer creationEventProducer,
+                                    PipelineFeatures pipelineFeatures,
+                                    RuleChecker ruleChecker,
+                                    RuleExemptionService ruleExemptionService) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -130,6 +151,7 @@ public class CreationPipelineService {
         this.creationEventProducer = creationEventProducer;
         this.pipelineFeatures = pipelineFeatures;
         this.ruleChecker = ruleChecker;
+        this.ruleExemptionService = ruleExemptionService;
     }
 
     // ------------------------------------------------------------------
@@ -652,6 +674,14 @@ public class CreationPipelineService {
             context.setOutline(outline);
             context.setTargetWordCount(request.getTargetWordCount());
             context.setPov(request.getPov());
+            // 误报豁免装配（M3-D6）：作者标记过的规则对本书静默；服务缺失/故障容忍为空集
+            if (ruleExemptionService != null) {
+                try {
+                    context.setExemptedRules(ruleExemptionService.listExemptedRules(request.getBookId()));
+                } catch (Exception e) {
+                    log.warn("豁免清单加载失败（按无豁免继续）: bookId={}", request.getBookId());
+                }
+            }
             RuleCheckResult result = ruleChecker.check(context);
             if (result.getExecutedRules().isEmpty()) {
                 return null;

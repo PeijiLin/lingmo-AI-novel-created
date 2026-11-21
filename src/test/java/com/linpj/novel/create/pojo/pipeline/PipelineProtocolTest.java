@@ -52,6 +52,56 @@ class PipelineProtocolTest {
     }
 
     // ------------------------------------------------------------------
+    // 六维 rubric 契约（v2.0 设计 8.1 / M3-D4：weightedScore 权重计算与容错）
+    // ------------------------------------------------------------------
+
+    @Test
+    void weightedScoreAppliesDimensionWeights() {
+        ReviewReport report = new ReviewReport();
+        report.setDimensionScores(java.util.Map.of(
+                "PLOT_ADVANCE", 4, "CHARACTER", 4,
+                "CONFLICT", 3, "PACING", 3,
+                "PROSE", 3, "ENDING_HOOK", 3));
+        // 加权：(4*.25 + 4*.20 + 3*.15 + 3*.15 + 3*.15 + 3*.10) = 1.0+0.8+0.45+0.45+0.45+0.3 = 3.45
+        assertEquals(3.45, report.weightedScore(), 0.0001);
+    }
+
+    @Test
+    void weightedScoreToleratesMissingDimensions() {
+        ReviewReport report = new ReviewReport();
+        report.setDimensionScores(java.util.Map.of("PLOT_ADVANCE", 5, "PROSE", 3));
+        // 权重归一化：(5*.25 + 3*.15) / (.25+.15) = (1.25+0.45)/0.4 = 4.25
+        assertEquals(4.25, report.weightedScore(), 0.0001);
+    }
+
+    @Test
+    void weightedScoreEmptyIsZero() {
+        ReviewReport report = new ReviewReport();
+        assertEquals(0.0, report.weightedScore());
+        report.setDimensionScores(null);
+        assertEquals(0.0, report.weightedScore());
+    }
+
+    @Test
+    void sixDimensionsRoundTripAndGateUnaffected() {
+        ReviewReport report = new ReviewReport();
+        report.setApproved(true);
+        report.setOverallScore(8);
+        report.setReadOnScore(6);
+        report.setDimensionScores(new java.util.LinkedHashMap<>(java.util.Map.of(
+                "PLOT_ADVANCE", 5, "CHARACTER", 4, "CONFLICT", 4,
+                "PACING", 5, "PROSE", 4, "ENDING_HOOK", 5)));
+        report.setIssues(java.util.List.of());
+
+        ReviewReport parsed = JsonUtil.fromJson(JsonUtil.toJson(report), ReviewReport.class);
+        // 序列化往返：六维与续读意愿保留
+        assertEquals(Integer.valueOf(5), parsed.getDimensionScores().get("PLOT_ADVANCE"));
+        assertEquals(Integer.valueOf(6), parsed.getReadOnScore());
+        // 门槛判定不受新字段影响（旧模型缺维度时 gate 语义不变）
+        assertTrue(parsed.isApproved() && !parsed.hasHighIssue());
+    }
+
+    // ------------------------------------------------------------------
     // Scene 叙事模式契约（v2.0 设计 2.1：JSON Schema 序列化往返）
     // ------------------------------------------------------------------
 

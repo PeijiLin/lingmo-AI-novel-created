@@ -268,6 +268,18 @@ public class CriticAgent {
                 5. overallScore 为 1-10 整体一致性评分；当且仅当 overallScore>=7 且不存在 HIGH 问题时 approved=true。
                 6. 无问题时 issues 返回空数组，不要编造问题。
 
+                【dimensionScores：六维打分（0-5 整数，各项缺省 3 分左右据实浮动）】
+                - PLOT_ADVANCE 情节推进：是否实质推进主线/支线（5 分=有不可逆的状态改变）
+                - CHARACTER 人物可信：动机成立、不 OOC、不降智（5 分=行为由已建立的动机必然导出）
+                - CONFLICT 冲突张力：对抗强度与代价（5 分=有明确对手、代价与不确定性）
+                - PACING 节奏控制：铺垫-爆发比例、信息密度（5 分=无冗余段落）
+                - PROSE 语言质感：画面感、对白自然度（5 分=具体可感、无解释性对白）
+                - ENDING_HOOK 章末钩子：悬念强度与合理性（5 分=必须翻页且非廉价悬念）
+
+                【readOnScore：续读意愿 1-7 整数】
+                模拟本书的目标读者，读完本章后继续翻页的意愿（1=弃书，4=中性，7=熬夜追更）。
+                独立打分，不计入 overallScore。
+
                 【输出要求】
                 只输出 JSON，不要输出任何解释性文字或 Markdown 代码块标记。
                 """;

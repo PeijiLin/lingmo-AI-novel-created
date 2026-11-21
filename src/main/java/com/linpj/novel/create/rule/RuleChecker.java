@@ -69,7 +69,10 @@ public class RuleChecker {
                 result.markFailed(ruleId);
                 continue;
             }
-            boolean shadowOnly = status == RuleStatus.SHADOW;
+            // 分档与灰度分流（v2.0 M3-D5）：SHADOW 全影子；GRADUAL 按 bookId 分流
+            // （偶数书籍阻塞/奇数书籍影子——同规则下双跑数据在线验证误报率）
+            boolean shadowOnly = status == RuleStatus.SHADOW
+                    || (status == RuleStatus.GRADUAL && !blocksForBook(context));
             for (RuleViolation violation : violations) {
                 violation.setShadow(shadowOnly);
                 if (shadowOnly) {
@@ -80,6 +83,11 @@ public class RuleChecker {
             }
         }
         return result;
+    }
+
+    /** 灰度分流：null bookId 保守进影子（数据缺失不引入阻塞） */
+    private static boolean blocksForBook(RuleCheckContext context) {
+        return context.getBookId() != null && context.getBookId() % 2 == 0;
     }
 
     private static boolean applies(ConsistencyRule rule, RuleCheckContext context) {

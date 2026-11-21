@@ -206,4 +206,29 @@ class RuleCheckerTest {
         assertTrue(result.getBlocking().isEmpty(), "配置错误不得意外阻塞");
         assertTrue(result.getExecutedRules().isEmpty());
     }
+
+    @Test
+    void GRADUAL灰度分流_偶数书籍阻塞奇数书籍影子() {
+        Map<String, String> status = new HashMap<>();
+        status.put("RC-01", "GRADUAL");
+        properties.setStatus(status);
+        RuleChecker checker = checkerOf(new StubRule("RC-01", RuleSeverity.HIGH, List.of(RuleStage.DRAFT)));
+
+        // 偶数书籍：阻塞生效（门槛达标观察期的一半流量）
+        RuleCheckContext evenBook = RuleCheckContext.of(RuleStage.DRAFT);
+        evenBook.setBookId(20L);
+        RuleCheckResult evenResult = checker.check(evenBook);
+        assertTrue(evenResult.hasBlockingHigh(), "偶数书籍灰度进入阻塞");
+
+        // 奇数书籍：影子（双跑数据在线验证误报率）
+        RuleCheckContext oddBook = RuleCheckContext.of(RuleStage.DRAFT);
+        oddBook.setBookId(21L);
+        RuleCheckResult oddResult = checker.check(oddBook);
+        assertEquals(1, oddResult.getShadow().size());
+        assertTrue(!oddResult.hasBlocking(), "奇数书籍灰度保持影子");
+
+        // 无书籍上下文：保守影子（数据缺失不引入阻塞）
+        RuleCheckResult noBook = checker.check(draftContext());
+        assertTrue(!noBook.hasBlocking());
+    }
 }

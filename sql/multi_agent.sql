@@ -175,3 +175,15 @@ CREATE TABLE IF NOT EXISTS novel_pending_assertion (
     resolved_at    TIMESTAMP WITH TIME ZONE
 );
 CREATE INDEX IF NOT EXISTS idx_pending_assertion_book ON novel_pending_assertion(book_id, status);
+
+-- 规则误报豁免（v2.0 M3-D6 误报闭环：作者标记误报 → 豁免白名单 → 回归集）
+-- 豁免即该规则对本书静默；豁免清单同时是规则调整时必须重跑的回归集数据源
+CREATE TABLE IF NOT EXISTS novel_rule_exemption (
+    id         BIGSERIAL PRIMARY KEY,
+    book_id    BIGINT NOT NULL,
+    rule_id    VARCHAR(30) NOT NULL,
+    reason     TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_rule_exemption UNIQUE (book_id, rule_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rule_exemption_book ON novel_rule_exemption(book_id);
