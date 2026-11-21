@@ -1068,4 +1068,72 @@ class CreationPipelineServiceTest {
         verify(safetyAudit, never()).record(any(), eq("STREAM"), any(), any(), any());
         verify(creationTaskService).completeTask(any(), eq(true), anyInt(), anyLong());
     }
+
+    // ------------------------------------------------------------------
+    // E6 降级阶梯硬编码（TC-30：关不掉即通过）
+    // ------------------------------------------------------------------
+
+    /**
+     * 5 个消融开关全开：降级语义不在开关域内（PipelineFeatures 无降级/安全键），
+     * 因此这里的降级行为必须与全关时完全一致——任何"靠开关关掉降级"的实现都会翻车。
+     */
+    private PipelineRequest allSwitchesOn(CreationMode mode) {
+        PipelineRequest req = request(mode);
+        req.setFeatures(Map.of("summaryTree", true, "triTimeline", true, "credibility", true,
+                "ruleRouting", true, "convergenceGuard", true));
+        return req;
+    }
+
+    @Test
+    void degradationNotSwitchablePlannerFailureStillDegrades() {
+        stubWriterContext();
+        stubCriticContext();
+        stubPlannerContext();
+        when(plannerAgent.plan(any())).thenThrow(new RuntimeException("解析失败"));
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(polisherAgent.polish(anyString(), any(), any()))
+                .thenReturn(new PolisherAgent.PolishResult("润色稿", 60L));
+        when(criticAgent.verifyPolish(any(), anyString()))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 9), 30L));
+
+        service.runAsync(51L, allSwitchesOn(CreationMode.REFINED));
+
+        // TC-30：开关全开也关不掉"Planner 失败 -> 直接续写"，且照旧标记降级
+        verify(contextAssemblyService).assembleWriterContext(any(), isNull());
+        verify(outlineStoreService, never()).saveOutline(any(), any(), any());
+        verify(creationTaskService).completeTask(eq(51L), eq(true), anyInt(), anyLong());
+    }
+
+    @Test
+    void degradationNotSwitchableCriticFailureStillApproves() {
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any())).thenThrow(new RuntimeException("网关超时"));
+
+        service.runAsync(52L, allSwitchesOn(CreationMode.STANDARD));
+
+        // TC-30：开关全开也关不掉"Critic 失败 -> 视为通过"（宁可放过不可改错）
+        verify(writerAgent, never()).rewrite(any(), anyString(), any(), anyInt(), any());
+        verify(creationTaskService).completeTask(eq(52L), eq(false), anyInt(), anyLong());
+    }
+
+    @Test
+    void degradationNotSwitchablePolisherFailureStillFallsBack() {
+        stubWriterContext();
+        stubCriticContext();
+        stubPlannerContext();
+        when(plannerAgent.plan(any())).thenReturn(new PlannerAgent.PlanResult(outline(), 80L));
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("原稿", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(polisherAgent.polish(any(), any(), any())).thenThrow(new RuntimeException("润色网关错误"));
+
+        service.runAsync(53L, allSwitchesOn(CreationMode.REFINED));
+
+        // TC-30：开关全开也关不掉"Polisher 失败 -> 采用润色前原稿"，且不因降级失败
+        verify(criticAgent, never()).verifyPolish(any(), any());
+        verify(creationTaskService).completeTask(eq(53L), eq(true), anyInt(), anyLong());
+        verify(creationTaskService, never()).failTask(any(), any());
+    }
 }
