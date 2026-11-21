@@ -59,8 +59,11 @@ public class FinalDraftGate {
      * 命中 → 定向修订问题清单。
      * 只给"改写命中表达"的指令，明确禁止改情节/改结构/压缩篇幅（否则 gate 变成整章重写，
      * 误杀成本不可接受）。
+     *
+     * 静态方法：中置拦截（M4-E2 的 StreamSafetyGate）与后置 gate 复用同一份修复指令，
+     * 避免两层安全给出不一致的改写要求。
      */
-    public ReviewReport repairReport(List<SensitiveTerms.Hit> hits) {
+    public static ReviewReport repairReport(List<SensitiveTerms.Hit> hits) {
         ReviewReport report = new ReviewReport();
         report.setApproved(false);
         report.setOverallScore(5);
@@ -105,7 +108,8 @@ public class FinalDraftGate {
                 .collect(Collectors.joining(", ", "[", "]"));
     }
 
-    private static String categoryOf(List<SensitiveTerms.Hit> hits) {
+    /** 命中分类（STREAM 层与 POST 层同口径，双指标可按分类横向合流） */
+    public static String categoryOf(List<SensitiveTerms.Hit> hits) {
         if (hits == null || hits.isEmpty()) {
             return CATEGORY_CLEAN;
         }

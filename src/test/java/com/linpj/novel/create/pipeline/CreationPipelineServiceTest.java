@@ -950,4 +950,122 @@ class CreationPipelineServiceTest {
         assertTrue(contents.contains("润色稿战死"), "润色终稿应过 gate 后下发修复稿");
         assertFalse(contents.contains("润色稿肢解"), "命中表达不得随润色稿下发");
     }
+
+    // ------------------------------------------------------------------
+    // 中置流式拦截（M4-E2：STREAM 层，命中即断 + 截断重生成，TC-38）
+    // ------------------------------------------------------------------
+
+    /** STREAM + POST 两层同装配（生产形态：同一份词表、同一套审计） */
+    private CreationPipelineService serviceWithSafetyLayers() {
+        com.linpj.novel.create.security.SensitiveTerms terms =
+                new com.linpj.novel.create.security.SensitiveTerms();
+        com.linpj.novel.create.security.FinalDraftGate gate =
+                new com.linpj.novel.create.security.FinalDraftGate(terms, safetyAudit);
+        com.linpj.novel.create.security.StreamSafetyGate streamGate =
+                new com.linpj.novel.create.security.StreamSafetyGate(terms, safetyAudit);
+        return new CreationPipelineService(writerAgent, criticAgent, plannerAgent, polisherAgent,
+                creationTaskService, artifactMapper, contextAssemblyService, plotThreadService,
+                outlineStoreService, creationEventProducer, pipelineFeatures, ruleChecker,
+                ruleExemptionService, gate, streamGate);
+    }
+
+    /**
+     * TC-38 主验收：流式命中即断 → 命中字面不下发 → REVISION 作废已下发部分 →
+     * 截断点 + 定向修订清单重生成一次 → 重生成稿进入后续流程。
+     */
+    @Test
+    void streamHitCutsOffAndRegeneratesOnce() throws Exception {
+        stubWriterContext();
+        // 模拟真实流式：Agent 边写边回调 onChunk，命中词出现在第一次增量里
+        when(writerAgent.write(any(), any())).thenAnswer(invocation -> {
+            java.util.function.Consumer<String> onChunk = invocation.getArgument(1);
+            onChunk.accept("他掏出制毒工艺的配方");
+            return new WriterAgent.WriteResult("不应走到这里", 1L);
+        });
+        when(writerAgent.rewrite(any(), anyString(), any(), eq(1), any())).thenAnswer(invocation -> {
+            java.util.function.Consumer<String> onChunk = invocation.getArgument(4);
+            onChunk.accept("他掏出一份泛黄的配方");
+            return new WriterAgent.WriteResult("他掏出一份泛黄的配方", 50L);
+        });
+
+        List<ServerSentEvent<String>> events =
+                runAndCollect(serviceWithSafetyLayers(), request(CreationMode.FAST));
+
+        // 1) 命中字面从未下发，客户端只收到重生成稿
+        String delivered = String.join("", contentTexts(events));
+        assertFalse(delivered.contains("制毒工艺"), "命中词不得出现在下发内容里");
+        assertTrue(delivered.contains("他掏出一份泛黄的配方"), "应下发截断重生成稿");
+        // 2) 必须发 REVISION（作废已外发的截断点，前端无需改协议）
+        assertTrue(stageEvents(events).stream().anyMatch(s ->
+                "WRITING".equals(s.getCode()) && "REVISION".equals(s.getStatus())),
+                "流式命中后需 REVISION 重置客户端缓冲");
+        // 3) 重生成一次为限，且走同一修订链路（问题清单为安全定向修订）
+        verify(writerAgent, times(1)).rewrite(any(), anyString(),
+                argThat((ReviewReport r) -> r.getIssues().size() == 1
+                        && "SAFETY_TERM".equals(r.getIssues().get(0).getType())), eq(1), any());
+        // 4) 中置拦截落账（layer=STREAM，与 POST 同口径分类）
+        verify(safetyAudit).record(eq(1L), eq("STREAM"), eq("WORDLIST_ILLEGAL"), eq("REWRITE"),
+                contains("制毒工艺"));
+        verify(creationTaskService).completeTask(any(), eq(false), anyInt(), anyLong());
+    }
+
+    /** 重生成后仍命中：不硬塞给读者，任务显式失败（转人工），并落 REJECT */
+    @Test
+    void streamHitTwiceFailsTaskInsteadOfLeaking() {
+        stubWriterContext();
+        when(writerAgent.write(any(), any())).thenAnswer(invocation -> {
+            java.util.function.Consumer<String> onChunk = invocation.getArgument(1);
+            onChunk.accept("他掏出制毒工艺的配方");
+            return new WriterAgent.WriteResult("不应走到这里", 1L);
+        });
+        when(writerAgent.rewrite(any(), anyString(), any(), anyInt(), any())).thenAnswer(invocation -> {
+            java.util.function.Consumer<String> onChunk = invocation.getArgument(4);
+            onChunk.accept("他仍在讲制毒工艺");
+            return new WriterAgent.WriteResult("不应走到这里", 1L);
+        });
+
+        serviceWithSafetyLayers().runAsync(41L, request(CreationMode.FAST));
+
+        verify(writerAgent, times(1)).rewrite(any(), anyString(), any(), anyInt(), any());
+        verify(safetyAudit).record(eq(1L), eq("STREAM"), eq("WORDLIST_ILLEGAL"), eq("REJECT"), anyString());
+        verify(creationTaskService).failTask(eq(41L), contains("制毒工艺"));
+        verify(creationTaskService, never()).completeTask(any(), anyBoolean(), anyInt(), anyLong());
+    }
+
+    /** PRECISE：双稿之一命中 → 走既有单稿降级（不重复落 STREAM 账，避免拦截率被刷） */
+    @Test
+    void preciseVariantStreamHitDegradesToSingleDraft() throws Exception {
+        stubWriterContext();
+        stubCriticContext();
+        stubPlannerContext();
+        when(plannerAgent.plan(any())).thenReturn(new PlannerAgent.PlanResult(outline(), 80L));
+        when(writerAgent.writeVariant(any(), eq(1), any())).thenAnswer(invocation -> {
+            java.util.function.Consumer<String> onChunk = invocation.getArgument(2);
+            onChunk.accept("变体A制毒工艺");
+            return new WriterAgent.WriteResult("不应走到这里", 1L);
+        });
+        when(writerAgent.writeVariant(any(), eq(2), any()))
+                .thenReturn(new WriterAgent.WriteResult("变体B干净稿", 110L));
+        when(writerAgent.write(any(), any())).thenAnswer(invocation -> {
+            java.util.function.Consumer<String> onChunk = invocation.getArgument(1);
+            onChunk.accept("单稿降级干净稿");
+            return new WriterAgent.WriteResult("单稿降级干净稿", 100L);
+        });
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(polisherAgent.polish(any(), any(), any()))
+                .thenReturn(new PolisherAgent.PolishResult("润色终稿", 60L));
+        when(criticAgent.verifyPolish(any(), anyString()))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 9), 30L));
+
+        List<ServerSentEvent<String>> events =
+                runAndCollect(serviceWithSafetyLayers(), request(CreationMode.PRECISE));
+
+        String delivered = String.join("", contentTexts(events));
+        assertFalse(delivered.contains("制毒工艺"), "被拦下的变体稿不得外发");
+        assertTrue(delivered.contains("单稿降级干净稿") || delivered.contains("润色终稿"),
+                "双稿命中后应降级单稿并跑完管道");
+        verify(writerAgent, times(1)).write(any(), any());
+        verify(safetyAudit, never()).record(any(), eq("STREAM"), any(), any(), any());
+        verify(creationTaskService).completeTask(any(), eq(true), anyInt(), anyLong());
+    }
 }

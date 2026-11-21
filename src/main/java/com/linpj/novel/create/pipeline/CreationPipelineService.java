@@ -30,6 +30,9 @@ import com.linpj.novel.create.rule.RuleStage;
 import com.linpj.novel.create.rule.RuleViolation;
 import com.linpj.novel.create.security.FinalDraftGate;
 import com.linpj.novel.create.security.SensitiveTerms;
+import com.linpj.novel.create.security.StreamGuard;
+import com.linpj.novel.create.security.StreamSafetyGate;
+import com.linpj.novel.create.security.StreamSensitiveHitException;
 import com.linpj.novel.create.service.ChapterOutlineStoreService;
 import com.linpj.novel.create.service.CreationTaskService;
 import com.linpj.novel.create.service.PlotThreadService;
@@ -50,6 +53,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 /**
  * 创作管道编排器（设计第四节）
@@ -95,6 +99,9 @@ public class CreationPipelineService {
     /** 定稿前安全 gate 的 artifact 轮次标记（M4-E3：命中/修复/人审队列留档） */
     private static final int POST_GATE_ROUND = 95;
 
+    /** 中置流式拦截的最大重生成次数（M4-E2：一次为限，避免"拦截-重生成"死循环烧钱） */
+    private static final int MAX_STREAM_REGENERATIONS = 1;
+
     /** 修订循环预算比（M3-D3：修订累计 token 超首写 40% 强制出循环；S10 校准前的相对口径） */
     private static final double REVISION_BUDGET_RATIO = 0.40;
 
@@ -115,6 +122,7 @@ public class CreationPipelineService {
     private final RuleChecker ruleChecker;
     private final RuleExemptionService ruleExemptionService;
     private final FinalDraftGate finalDraftGate;
+    private final StreamSafetyGate streamSafetyGate;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -149,12 +157,32 @@ public class CreationPipelineService {
                                     RuleExemptionService ruleExemptionService) {
         this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
                 contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
-                pipelineFeatures, ruleChecker, ruleExemptionService, null);
+                pipelineFeatures, ruleChecker, ruleExemptionService, null, null);
+    }
+
+    /** 含定稿前 gate、不含中置流式拦截的装配（单测/离线装配用：E2 前行为） */
+    public CreationPipelineService(WriterAgent writerAgent,
+                                    CriticAgent criticAgent,
+                                    PlannerAgent plannerAgent,
+                                    PolisherAgent polisherAgent,
+                                    CreationTaskService creationTaskService,
+                                    CreationStageArtifactMapper artifactMapper,
+                                    ContextAssemblyService contextAssemblyService,
+                                    PlotThreadService plotThreadService,
+                                    ChapterOutlineStoreService outlineStoreService,
+                                    CreationEventProducer creationEventProducer,
+                                    PipelineFeatures pipelineFeatures,
+                                    RuleChecker ruleChecker,
+                                    RuleExemptionService ruleExemptionService,
+                                    FinalDraftGate finalDraftGate) {
+        this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
+                contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
+                pipelineFeatures, ruleChecker, ruleExemptionService, finalDraftGate, null);
     }
 
     /**
-     * 生产装配（Spring 唯一注入点）：含定稿前安全 gate（M4-E3）。
-     * 安全层不可让渡（P6）：gate 恒装配，词表为空即命中恒为空，不存在关闭开关。
+     * 生产装配（Spring 唯一注入点）：含定稿前安全 gate（M4-E3）与中置流式拦截（M4-E2）。
+     * 安全层不可让渡（P6）：两层恒装配，词表为空即命中恒为空，不存在关闭开关。
      */
     @Autowired
     public CreationPipelineService(WriterAgent writerAgent,
@@ -170,7 +198,8 @@ public class CreationPipelineService {
                                     PipelineFeatures pipelineFeatures,
                                     RuleChecker ruleChecker,
                                     RuleExemptionService ruleExemptionService,
-                                    FinalDraftGate finalDraftGate) {
+                                    FinalDraftGate finalDraftGate,
+                                    StreamSafetyGate streamSafetyGate) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -185,6 +214,7 @@ public class CreationPipelineService {
         this.ruleChecker = ruleChecker;
         this.ruleExemptionService = ruleExemptionService;
         this.finalDraftGate = finalDraftGate;
+        this.streamSafetyGate = streamSafetyGate;
     }
 
     // ------------------------------------------------------------------
@@ -349,11 +379,28 @@ public class CreationPipelineService {
         creationTaskService.advanceStage(taskId, StageCode.WRITING.name());
         WriterContext writerContext = contextAssemblyService.assembleWriterContext(request, plan.outline());
 
-        Mono<WriterAgent.WriteResult> draftA = Mono.fromCallable(
-                        () -> writerAgent.writeVariant(writerContext, 1, emitter::emitContent))
+        // 双稿都过 STREAM 层（M4-E2）：A 稿边写边发，B 稿静默聚合——
+        // 若胜出的是 B 稿，其正文同样要"先拦后发"（否则择优回退的整稿重发就是绕过点）
+        StreamGuard guardA = streamSafetyGate == null ? null : streamSafetyGate.newGuard();
+        StreamGuard guardB = streamSafetyGate == null ? null : streamSafetyGate.newGuard();
+        Consumer<String> sinkA = guardA == null ? emitter::emitContent : guardA.guarded(emitter::emitContent);
+        Consumer<String> silent = chunk -> { };
+        Consumer<String> sinkB = guardB == null ? silent : guardB.guarded(silent);
+        Mono<WriterAgent.WriteResult> draftA = Mono.fromCallable(() -> {
+                    WriterAgent.WriteResult result = writerAgent.writeVariant(writerContext, 1, sinkA);
+                    if (guardA != null) {
+                        guardA.flush(emitter::emitContent); // 跨包窗口的尾巴补齐
+                    }
+                    return result;
+                })
                 .subscribeOn(PIPELINE_SCHEDULER);
-        Mono<WriterAgent.WriteResult> draftB = Mono.fromCallable(
-                        () -> writerAgent.writeVariant(writerContext, 2, chunk -> { }))
+        Mono<WriterAgent.WriteResult> draftB = Mono.fromCallable(() -> {
+                    WriterAgent.WriteResult result = writerAgent.writeVariant(writerContext, 2, sinkB);
+                    if (guardB != null) {
+                        guardB.flush(silent);
+                    }
+                    return result;
+                })
                 .subscribeOn(PIPELINE_SCHEDULER);
         WriterAgent.WriteResult resultA;
         WriterAgent.WriteResult resultB;
@@ -365,6 +412,11 @@ public class CreationPipelineService {
         } catch (Exception e) {
             // 双稿并行失败：降级为单稿（标准稿重试机制走 writeWithRetry）。
             // 失败前标准稿可能已流式外发部分内容：先 REVISION 重置客户端内容缓冲再走单稿，避免拼接污染
+            // 命中类失败（M4-E2）同样走这条降级路：单稿链路自带"命中即断 + 截断重生成 + 失败即失败"，
+            // 因此这里不重复落 STREAM 账（避免同一次拦截被计两次、污染拦截率）。
+            if (e instanceof StreamSensitiveHitException hit) {
+                log.warn("并行双稿流式命中，降级为单稿重生成: hits={}", FinalDraftGate.describe(hit.hits()));
+            }
             log.warn("并行双稿失败，降级为单稿: {}", e.getMessage());
             degraded = true;
             emitter.emitStage(StageEvent.revision(StageCode.WRITING, 1));
@@ -823,7 +875,7 @@ public class CreationPipelineService {
                     request.getBookId(), request.getChapterId(), FinalDraftGate.describe(hits));
             WriterContext writerContext = contextAssemblyService.assembleWriterContext(request, outline);
             WriterAgent.WriteResult repaired = writerAgent.rewrite(
-                    writerContext, draft, finalDraftGate.repairReport(hits), 1, chunk -> { });
+                    writerContext, draft, FinalDraftGate.repairReport(hits), 1, chunk -> { });
             List<SensitiveTerms.Hit> recheck = finalDraftGate.scan(repaired.text());
             if (recheck.isEmpty()) {
                 finalDraftGate.recordRewrite(request.getBookId(), request.getChapterId(), hits,
@@ -865,22 +917,35 @@ public class CreationPipelineService {
      * 首次尝试正常流式外发；重试尝试改为缓冲后一次性下发
      * ——失败尝试已外发的部分内容会污染客户端缓冲，重试成功后必须以 REVISION 事件重置再发完整产出。
      *
+     * 中置流式拦截（M4-E2，设计 4.6 STREAM 层）：
+     * - 每次尝试的下发都过 {@link StreamGuard}：命中词在**下发前**被拦下（客户端看不到），
+     *   随后发 REVISION 作废已下发部分，用"截断点之前的正文 + 定向修订清单"重生成一次；
+     * - 重生成后仍命中 / 无可重生成内容：落 STREAM/REJECT 并让任务失败（转人工，不硬塞）
+     * —— 安全层的失败必须是显式失败，不能降级成"照发"。
+     *
      * @param review 重写轮次携带的问题清单；null 表示首轮写作
      * @param draft  待修订原稿；首轮写作时为 null
      */
     private WriterAgent.WriteResult writeWithRetry(WriterContext context, ProgressEmitter emitter,
                                                     ReviewReport review, String draft) {
         int attempt = 0;
+        int regenerations = 0;
         while (true) {
             final boolean isRetry = attempt > 0;
             StringBuilder retryBuffer = isRetry ? new StringBuilder() : null;
-            java.util.function.Consumer<String> sink = isRetry ? retryBuffer::append : emitter::emitContent;
+            Consumer<String> downstream = isRetry ? retryBuffer::append : emitter::emitContent;
+            StreamGuard guard = streamSafetyGate == null ? null : streamSafetyGate.newGuard();
+            Consumer<String> sink = guard == null ? downstream : guard.guarded(downstream);
+            int round = Math.max(1, attempt + 1);
             try {
                 WriterAgent.WriteResult result;
                 if (review == null) {
                     result = writerAgent.write(context, sink);
                 } else {
-                    result = writerAgent.rewrite(context, draft, review, attempt + 1, sink);
+                    result = writerAgent.rewrite(context, draft, review, round, sink);
+                }
+                if (guard != null) {
+                    guard.flush(downstream); // 尾巴补齐（跨包窗口留下的未下发字符）
                 }
                 if (isRetry) {
                     // 重试成功：REVISION 事件重置客户端缓冲（抹去失败尝试的部分内容）后下发完整产出
@@ -888,6 +953,27 @@ public class CreationPipelineService {
                     emitter.emitContent(result.text());
                 }
                 return result;
+            } catch (StreamSensitiveHitException hit) {
+                if (streamSafetyGate == null || regenerations >= MAX_STREAM_REGENERATIONS) {
+                    if (streamSafetyGate != null) {
+                        streamSafetyGate.recordReject(context.getBookId(), context.getChapterId(),
+                                hit.hits(), hit.partialText().length());
+                    }
+                    log.warn("流式中置拦截无法恢复（已重生成 {} 次），任务失败: hits={}",
+                            regenerations, FinalDraftGate.describe(hit.hits()));
+                    throw hit;
+                }
+                regenerations++;
+                streamSafetyGate.recordRewrite(context.getBookId(), context.getChapterId(),
+                        hit.hits(), hit.partialText().length());
+                log.warn("流式中置拦截：命中即断，截断重生成（第 {} 次）: hits={}",
+                        regenerations, FinalDraftGate.describe(hit.hits()));
+                // REVISION 作废客户端已收到的部分（与择优回退/重写轮次同一协议语义，前端无需改动）
+                emitter.emitStage(StageEvent.revision(StageCode.WRITING, round));
+                // 截断重生成：以已下发正文为原稿 + 与 POST 层同一份"只改表达"的修复指令
+                draft = hit.partialText(); // 可能为空串：此时等价于"带避雷清单重写"，仍走同一修订链路
+                review = FinalDraftGate.repairReport(hit.hits());
+                attempt = 0; // 本次不计入普通失败重试次数
             } catch (Exception e) {
                 attempt++;
                 if (attempt > 1) {
