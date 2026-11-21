@@ -81,8 +81,14 @@ public class CreationPipelineService {
     /** PRECISE 落选稿的 artifact 轮次标记 */
     private static final int PRECISE_REJECTED_ROUND = 98;
 
-    /** 规则校验结果的 artifact 轮次标记（N3/N5，区别于 Critic 重写轮次） */
+    /** 规则校验结果的 artifact 轮次标记（N3/N5，区别于 Critic 评审轮次） */
     private static final int RULE_CHECK_ROUND = 97;
+
+    /** 终稿采纳记录的 artifact 轮次标记（M3-D1：采纳轮次/回滚/未达标落账，区别于上述两类） */
+    private static final int ADOPTED_ROUND = 96;
+
+    /** 修订循环预算比（M3-D3：修订累计 token 超首写 40% 强制出循环；S10 校准前的相对口径） */
+    private static final double REVISION_BUDGET_RATIO = 0.40;
 
     /** PRECISE 双稿总超时（两稿并行，对齐单稿 Writer 180s） */
     private static final Duration DUAL_DRAFT_TIMEOUT = Duration.ofSeconds(180);
@@ -300,7 +306,9 @@ public class CreationPipelineService {
             resultB = null;
         }
 
-        // —— 双 Critic 择优（overallScore 高者胜，平分取 A 避免抖动）——
+        // —— 双 Critic 择优 ——
+        // ADR-6（v2.0 M3-D2，评审 N1 必改）：convergenceGuard 开启时选优用成对比较（同批评审消除跨调用绝对分漂移），
+        // 关闭时保持现状绝对分比较（TIE 取 A 避免抖动）；绝对分仅继续作为通过的门槛判定
         emitter.emitStage(StageEvent.started(StageCode.CRITIC, 3, total));
         creationTaskService.advanceStage(taskId, StageCode.CRITIC.name());
         CriticAgent.ReviewResult reviewA = reviewDraft(request, resultA.text(), plan.outline());
@@ -317,7 +325,17 @@ public class CreationPipelineService {
         }
         usage.setStages(usage.getStages() + 1);
 
-        boolean bWins = reviewB != null && scoreOf(reviewB.report()) > scoreOf(reviewA.report());
+        boolean bWins;
+        if (Boolean.TRUE.equals(features.get("convergenceGuard")) && resultB != null) {
+            CriticAgent.CompareResult verdict =
+                    compareDrafts(request, usage, plan.outline(), resultA.text(), resultB.text());
+            bWins = verdict.bWins();
+            saveArtifact(taskId, StageCode.CRITIC, 1,
+                    Map.of("pairwise", List.of("A", "B"), "winner", verdict.winner(), "reason", verdict.reason()),
+                    verdict.tokens());
+        } else {
+            bWins = reviewB != null && scoreOf(reviewB.report()) > scoreOf(reviewA.report());
+        }
         String selectedDraft = (bWins ? resultB : resultA).text();
         CriticAgent.ReviewResult selectedReview = bWins ? reviewB : reviewA;
         saveArtifact(taskId, StageCode.CRITIC, 1, selectedReview.report(), selectedReview.tokens());
@@ -333,8 +351,9 @@ public class CreationPipelineService {
         // N5 规则校验并入胜稿评审报告（P6：硬校验不因择优而缺席）
         CriticAgent.ReviewResult selectedWithRules =
                 reviewWithRules(request, taskId, selectedDraft, plan.outline(), selectedReview, features);
+        long selectedWriteTokens = (bWins ? resultB : resultA).tokens();
         DraftOutcome outcome = rewriteLoop(request, taskId, emitter, usage, plan.outline(),
-                writerContext, selectedDraft, selectedWithRules.report(), 2, total, features);
+                writerContext, selectedDraft, selectedWithRules.report(), 2, total, features, selectedWriteTokens);
 
         // —— 伏笔记账 + Polisher（序号 4）——
         settleLedger(request, plan.outline(), outcome.draft());
@@ -463,22 +482,43 @@ public class CreationPipelineService {
         usage.setStages(usage.getStages() + 1);
 
         return rewriteLoop(request, taskId, emitter, usage, outline, writerContext,
-                writeResult.text(), firstReview.report(), writerIndex, total, features);
+                writeResult.text(), firstReview.report(), writerIndex, total, features, writeResult.tokens());
     }
 
     /**
-     * 重写回路（止损：总轮数 <= maxRewriteRounds，硬上限 3）
+     * 重写回路（止损：总轮数 <= maxRewriteRounds，硬上限 3）。
      *
-     * @param firstReport 首审报告（择优稿场景为胜稿的评审报告，不再重复首审）
-     * @return 终稿与降级标记（轮数耗尽仍未通过 -> 取最后一稿 + degraded）
+     * convergenceGuard 开启（v2.0 M3-D1/D2/D3，收敛控制器）：
+     * - best-of 追踪：历史最优稿/报告留档，新稿劣于最优时回滚最优版本并强制出循环（成对比较判定，
+     *   绝对分只做门槛——评审 N1：跨调用漂移不可用于跨轮比较）
+     * - 循环预算：修订累计 token（含判优调用）超首写 40% 强制出循环（S10 校准前的相对口径）
+     * - 轮次落账：采纳轮次/回滚/未达标写入 artifact（ADOPTED_ROUND，断点续跑 F2 的轮次恢复数据源）
+     * 关闭（默认）：现状语义（轮次上限 + HIGH/MEDIUM 触发规则，每轮最新即终稿）。
+     *
+     * @param firstReport     首审报告（择优稿场景为胜稿的评审报告，不再重复首审）
+     * @param baseWriteTokens 首写（或择优胜稿）的 token——修订预算的基准
      */
     private DraftOutcome rewriteLoop(PipelineRequest request, Long taskId, ProgressEmitter emitter,
                                      StageUsage usage, ChapterOutline outline, WriterContext writerContext,
                                      String draft, ReviewReport firstReport, int writerIndex, int total,
-                                     Map<String, Boolean> features) {
+                                     Map<String, Boolean> features, long baseWriteTokens) {
+        boolean guard = Boolean.TRUE.equals(features.get("convergenceGuard"));
         ReviewReport report = firstReport;
+        String bestDraft = draft;
+        ReviewReport bestReport = firstReport;
+        int adoptedRound = 1;
+        long revisionTokens = 0;
+        boolean rolledBack = false;
+        boolean budgetExhausted = false;
         int round = 1;
         while (!report.isApproved() && round <= request.getMaxRewriteRounds() && shouldRewrite(report, round)) {
+            // 循环预算（M3-D3）：修订累计 token 超首写 40% -> 强制出循环（防无限烧钱，不可达 pass 时及时止损）
+            if (guard && revisionTokens > REVISION_BUDGET_RATIO * baseWriteTokens) {
+                budgetExhausted = true;
+                log.warn("修订预算耗尽（累计 {} token / 首写 {} token），强制出循环: taskId={}",
+                        revisionTokens, baseWriteTokens, taskId);
+                break; // 客户端缓冲已持有当前稿全文（流式外发），无需重置信号
+            }
             emitter.emitStage(StageEvent.revision(StageCode.WRITING, round));
             creationTaskService.advanceStage(taskId, StageCode.WRITING.name());
             WriterAgent.WriteResult rewriteResult = writeWithRetry(writerContext, emitter, report, draft);
@@ -486,6 +526,7 @@ public class CreationPipelineService {
                     Map.of("text", rewriteResult.text()), rewriteResult.tokens());
             usage.addTokens(rewriteResult.tokens());
             usage.setStages(usage.getStages() + 1);
+            revisionTokens += rewriteResult.tokens();
             draft = rewriteResult.text();
 
             emitter.emitStage(StageEvent.started(StageCode.CRITIC, writerIndex + 1, total));
@@ -496,10 +537,57 @@ public class CreationPipelineService {
             saveArtifact(taskId, StageCode.CRITIC, round + 1, recheck.report(), recheck.tokens());
             usage.addTokens(recheck.tokens());
             usage.setStages(usage.getStages() + 1);
+            revisionTokens += recheck.tokens();
             report = recheck.report();
+
+            if (guard) {
+                // best-of 判定（M3-D2）：新稿（挑战者 A）vs 历史最优（擂主 B）；TIE 保守保持擂主
+                CriticAgent.CompareResult verdict =
+                        compareDrafts(request, usage, outline, draft, bestDraft);
+                revisionTokens += verdict.tokens();
+                if (verdict.aWins()) {
+                    bestDraft = draft;
+                    bestReport = report;
+                    adoptedRound = round + 1;
+                } else {
+                    // 新稿劣于或未胜过历史最优：回滚最优版本并终止循环（LLM 修订不是单调改进算子）
+                    rolledBack = true;
+                    log.info("修订回滚：新稿未胜过历史最优(采纳轮次 {}), 回滚: taskId={}", adoptedRound, taskId);
+                    emitter.emitStage(StageEvent.revision(StageCode.WRITING, round));
+                    emitter.emitContent(bestDraft);
+                    draft = bestDraft;
+                    report = bestReport;
+                    break;
+                }
+            }
             round++;
         }
-        return new DraftOutcome(draft, !report.isApproved());
+        if (guard) {
+            // 轮次落账（M3-D1）：采纳轮次/回滚/预算/未达标留档；未达标待人审队列（M3-D6/P2 卡点）接管
+            saveArtifact(taskId, StageCode.CRITIC, ADOPTED_ROUND, Map.of(
+                    "adoptedRound", adoptedRound,
+                    "rolledBack", rolledBack,
+                    "budgetExhausted", budgetExhausted,
+                    "unmet", !report.isApproved()), 0);
+        }
+        return new DraftOutcome(draft, !report.isApproved(), adoptedRound, rolledBack);
+    }
+
+    /**
+     * 成对比较封装（M3-D2）：判优调用失败保守归 TIE（保持擂主/现状稿）。
+     * 判优 token 计入修正预算（usage 与 revisionTokens 均计入）。 
+     */
+    private CriticAgent.CompareResult compareDrafts(PipelineRequest request, StageUsage usage,
+                                                   ChapterOutline outline, String draftA, String draftB) {
+        try {
+            CriticContext context = contextAssemblyService.assembleCriticContext(request, draftA, outline);
+            CriticAgent.CompareResult verdict = criticAgent.compare(context, draftA, draftB);
+            usage.addTokens(verdict.tokens());
+            return verdict;
+        } catch (Exception e) {
+            log.warn("成对比较调用失败，保守保持既有稿: {}", e.getMessage());
+            return new CriticAgent.CompareResult("TIE", "判优调用失败，保守保持既有稿", 0);
+        }
     }
 
     /**
@@ -742,7 +830,7 @@ public class CreationPipelineService {
     }
 
     /** 闭环产出：终稿 + 是否降级 */
-    private record DraftOutcome(String draft, boolean degraded) {
+    private record DraftOutcome(String draft, boolean degraded, int adoptedRound, boolean rolledBack) {
     }
 
     /** Planner 阶段产出：大纲 + 是否降级 */

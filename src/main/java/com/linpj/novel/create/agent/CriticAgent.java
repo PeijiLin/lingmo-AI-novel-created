@@ -1,7 +1,9 @@
 package com.linpj.novel.create.agent;
 
 import com.linpj.novel.create.pojo.pipeline.CriticContext;
+import com.linpj.novel.create.pojo.pipeline.ChapterOutline;
 import com.linpj.novel.create.pojo.pipeline.ReviewReport;
+import com.linpj.novel.create.pojo.pipeline.Scene;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -26,6 +28,17 @@ public class CriticAgent {
 
     /** Critic 单次审查结果（结构化报告 + token 用量） */
     public record ReviewResult(ReviewReport report, long tokens) {
+    }
+
+    /** 成对比较结果（ADR-6：选优用成对比较，绝对分只做门槛——跨调用绝对分漂移可达 1 分，不可用于比较） */
+    public record CompareResult(String winner, String reason, long tokens) {
+        public boolean aWins() {
+            return "A".equalsIgnoreCase(winner);
+        }
+
+        public boolean bWins() {
+            return "B".equalsIgnoreCase(winner);
+        }
     }
 
     /** Critic wall-clock 超时（设计 4.4：Critic 60s） */
@@ -132,6 +145,106 @@ public class CriticAgent {
         }
         normalize(report);
         return new ReviewResult(report, tokens);
+    }
+
+    // ------------------------------------------------------------------
+    // 成对比较（ADR-6：选优专用，不与绝对分混用）
+    // ------------------------------------------------------------------
+
+    /**
+     * 成对比较两稿（同批评审一次性对比，消除跨调用绝对分漂移）。
+     *
+     * 用途：PRECISE 择优 / 修订回滚判定（v2.0 M3-D2，评审 N1 必改）。
+     * A 稿为挑战者（新稿），B 稿为擂主（历史最优/既胜稿）；TIE 判给 B（保守：现状稿优先，避免抖动）。
+     *
+     * @param context 事实基准（outline/设定/摘要；draft 字段忽略，比较稿由参数显式传入）
+     */
+    public CompareResult compare(CriticContext context, String draftA, String draftB) {
+        BeanOutputConverter<CompareVerdict> verdictConverter = new BeanOutputConverter<>(CompareVerdict.class);
+        String userPrompt = "请对比以下两稿（A 稿与 B 稿），判优。\n\n"
+                + verdictConverter.getFormat()
+                + "\n\n【A 稿（挑战者/新稿）】\n" + nullSafe(draftA)
+                + "\n\n【B 稿（擂主/既有稿）】\n" + nullSafe(draftB) + "\n\n"
+                + buildFactualBase(context);
+
+        ChatResponse response = Objects.requireNonNull(
+                chatClient.prompt()
+                        .system("""
+                                你是严苛的小说责编，做两稿判优。只依据给定事实材料（设定/角色/摘要/伏笔/大纲），
+                                只比较一致性、情节因果、人物行为可信度与信息密度；文笔好坏不作主要依据。
+                                胜者仅限 A/B；两稿接近难分时判 TIE（保守：判 TIE 即保持 B 稿）。
+                                winner 只能输出 A、B 或 TIE，reason 一句话给出胜因。
+                                """)
+                        .user(userPrompt)
+                        .call()
+                        .chatResponse(),
+                "比较响应为空");
+
+        String json = WriterAgent.extractText(response);
+        long tokens = WriterAgent.usageOf(response);
+        if (tokens <= 0) {
+            tokens = WriterAgent.estimateTokens(json);
+        }
+        CompareVerdict verdict = verdictConverter.convert(Objects.requireNonNullElse(json, ""));
+        if (verdict == null || verdict.winner() == null) {
+            // 判优解析失败：保守归 TIE（保持擂主，不引入新控制流风险）
+            return new CompareResult("TIE", "判优响应解析失败，保守保持既有稿", tokens);
+        }
+        String winner = verdict.winner().trim().toUpperCase();
+        if (!"A".equals(winner) && !"B".equals(winner) && !"TIE".equals(winner)) {
+            winner = "TIE";
+        }
+        return new CompareResult(winner, nullSafe(verdict.reason()), tokens);
+    }
+
+    /** 内部判优 JSON 契约 */
+    private record CompareVerdict(String winner, String reason) {
+    }
+
+    private static String nullSafe(String s) {
+        return s == null ? "" : s;
+    }
+
+    /** 事实基准段（判优与审查共用口径，不含待审稿本身） */
+    private String buildFactualBase(CriticContext context) {
+        StringBuilder sb = new StringBuilder();
+        if (WriterAgent.notBlank(context.getWorldSetting())) {
+            sb.append("【世界观设定（事实基准）】\n").append(context.getWorldSetting()).append("\n\n");
+        }
+        if (WriterAgent.notBlank(context.getCharacterInfo())) {
+            sb.append("【人物设定与当前状态（事实基准）】\n").append(context.getCharacterInfo()).append("\n\n");
+        }
+        if (WriterAgent.notBlank(context.getStoryDigest())) {
+            sb.append("【前情摘要（事实基准）】\n").append(context.getStoryDigest()).append("\n\n");
+        }
+        if (WriterAgent.notBlank(context.getActivePlotThreads())) {
+            sb.append("【活跃伏笔账本（事实基准）】\n").append(context.getActivePlotThreads()).append("\n\n");
+        }
+        if (context.getOutline() != null) {
+            sb.append("【本章大纲（情节基准）】\n").append(outlineOf(context)).append("\n\n");
+        }
+        return sb.toString();
+    }
+
+    private String outlineOf(CriticContext context) {
+        // 大纲渲染复用 Writer 的口径（标题+场景列表），避免两套渲染漂移
+        return renderOutlineBrief(context.getOutline());
+    }
+
+    /** 大纲简要渲染（判优基准用） */
+    private String renderOutlineBrief(ChapterOutline outline) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("章节标题：").append(nullSafe(outline.getChapterTitle())).append("\n");
+        if (outline.getScenes() != null) {
+            for (int i = 0; i < outline.getScenes().size(); i++) {
+                Scene scene = outline.getScenes().get(i);
+                sb.append("场景").append(i + 1).append("：")
+                        .append(nullSafe(scene.getLocation()))
+                        .append("；冲突=").append(nullSafe(scene.getConflict()))
+                        .append("；结果=").append(nullSafe(scene.getOutcome())).append("\n");
+            }
+        }
+        return sb.toString();
     }
 
     // ------------------------------------------------------------------

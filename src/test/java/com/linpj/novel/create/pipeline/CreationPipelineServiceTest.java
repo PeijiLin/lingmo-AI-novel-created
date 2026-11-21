@@ -321,6 +321,119 @@ class CreationPipelineServiceTest {
         verify(creationTaskService).completeTask(eq(24L), eq(false), anyInt(), anyLong());
     }
 
+    // ------------------------------------------------------------------
+    // 收敛控制器（v2.0 M3-D1/D2/D3，convergenceGuard 开关门控）
+    // ------------------------------------------------------------------
+
+    /** TC-开关回归：guard 关闭（默认）时判优通道零调用——绝对分现状路径 */
+    @Test
+    void convergenceGuardOffNeverCallsCompare() {
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(false, 5, issue("MEDIUM", "TIMELINE")), 40L));
+        when(writerAgent.rewrite(any(), anyString(), any(), anyInt(), any()))
+                .thenReturn(new WriterAgent.WriteResult("d2", 120L));
+
+        service.runAsync(31L, request(CreationMode.STANDARD));
+
+        verify(criticAgent, never()).compare(any(), anyString(), anyString());
+        verify(writerAgent, times(1)).rewrite(any(), anyString(), any(), anyInt(), any());
+    }
+
+    /** M3-D2：guard 开启时 PRECISE 择优走成对比较（ADR-6：绝对分只做门槛） */
+    @Test
+    void precisePairwiseSelectionUnderConvergenceGuard() throws Exception {
+        stubWriterContext();
+        stubCriticContext();
+        stubPlannerContext();
+        when(plannerAgent.plan(any())).thenReturn(new PlannerAgent.PlanResult(outline(), 80L));
+        when(writerAgent.writeVariant(any(), eq(1), any()))
+                .thenReturn(new WriterAgent.WriteResult("标准稿", 100L));
+        when(writerAgent.writeVariant(any(), eq(2), any()))
+                .thenReturn(new WriterAgent.WriteResult("变体稿", 110L));
+        // 两稿绝对分相同（旧绝对分路径必取 A）：成对比较判 B 胜
+        when(criticAgent.review(any()))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 8), 42L));
+        when(criticAgent.compare(any(), eq("标准稿"), eq("变体稿")))
+                .thenReturn(new CriticAgent.CompareResult("B", "变体稿因果更顺", 6L));
+        when(polisherAgent.polish(anyString(), any(), any()))
+                .thenReturn(new PolisherAgent.PolishResult("润色终稿", 60L));
+        when(criticAgent.verifyPolish(any(), anyString()))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 9), 30L));
+
+        PipelineRequest req = request(CreationMode.PRECISE);
+        req.setFeatures(Map.of("convergenceGuard", true));
+        List<ServerSentEvent<String>> events = runAndCollect(req);
+
+        // 择优由成对比较驱动（同分也能分出胜者）：变体稿胜出
+        verify(criticAgent).compare(any(), eq("标准稿"), eq("变体稿"));
+        assertTrue(contentTexts(events).stream().anyMatch(t -> t != null && t.contains("变体稿"))
+                        || contentTexts(events).contains("变体稿"),
+                "变体稿胜出应下发到内容流");
+        // 采纳记录落档（D1）：首轮通过 adoptedRound=1，无回滚
+        verify(artifactMapper).insert(argThat((CreationStageArtifact a) ->
+                a.getRound() == 96 && a.getStage().equals("CRITIC")));
+    }
+
+    /** M3-D2：新稿劣于历史最优 -> 回滚最优版本并终止循环（LLM 修订非单调改进算子） */
+    @Test
+    void convergenceGuardOnRollsBackToBestDraftWhenRevisionWorse() {
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("首稿", 1000L));
+        when(criticAgent.review(any()))
+                .thenReturn(new CriticAgent.ReviewResult(report(false, 6, issue("HIGH", "PLOT_HOLE")), 40L))
+                .thenReturn(new CriticAgent.ReviewResult(report(false, 6, issue("HIGH", "PLOT_HOLE")), 40L));
+        when(writerAgent.rewrite(any(), eq("首稿"), any(), eq(1), any()))
+                .thenReturn(new WriterAgent.WriteResult("劣化稿", 200L));
+        // 新稿（挑战者 A=劣化稿）未胜过擂主（B=首稿）：TIE/B 均触发回滚
+        when(criticAgent.compare(any(), eq("劣化稿"), eq("首稿")))
+                .thenReturn(new CriticAgent.CompareResult("B", "首稿因果更完整", 6L));
+
+        PipelineRequest req = request(CreationMode.STANDARD);
+        req.setFeatures(Map.of("convergenceGuard", true));
+        service.runAsync(32L, req);
+
+        // 仅一轮重写即回滚出循环
+        verify(writerAgent, times(1)).rewrite(any(), anyString(), any(), anyInt(), any());
+        verify(artifactMapper).insert(argThat((CreationStageArtifact a) -> a.getRound() == 96
+                && a.getStage().equals("CRITIC")
+                && a.getArtifact() != null
+                && a.getArtifact().toString().contains("rolledBack")));
+        // 回滚后仍未达标：degraded 出章
+        verify(creationTaskService).completeTask(eq(32L), eq(true), anyInt(), anyLong());
+    }
+
+    /** M3-D3：修订累计 token 超首写 40% -> 强制出循环（止损） */
+    @Test
+    void convergenceGuardOnBudgetExhaustionStopsLoop() {
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any()))
+                .thenReturn(new CriticAgent.ReviewResult(report(false, 6, issue("HIGH", "PLOT_HOLE")), 20L))
+                .thenReturn(new CriticAgent.ReviewResult(report(false, 6, issue("HIGH", "PLOT_HOLE")), 20L));
+        when(writerAgent.rewrite(any(), anyString(), any(), anyInt(), any()))
+                .thenReturn(new WriterAgent.WriteResult("d2", 90L)); // 90+20 > 40%×100
+        // 每轮新稿都胜过最优（走完整轮次路径，不触发回滚）
+        when(criticAgent.compare(any(), anyString(), anyString()))
+                .thenReturn(new CriticAgent.CompareResult("A", "新稿更优", 5L));
+
+        PipelineRequest req = request(CreationMode.STANDARD);
+        req.setFeatures(Map.of("convergenceGuard", true));
+        req.setMaxRewriteRounds(3); // 轮次上限本可 3 轮
+        service.runAsync(33L, req);
+
+        // 预算在第 2 轮开始前耗尽：只有 1 次重写
+        verify(writerAgent, times(1)).rewrite(any(), anyString(), any(), anyInt(), any());
+        verify(artifactMapper).insert(argThat((CreationStageArtifact a) -> a.getRound() == 96
+                && a.getArtifact() != null
+                && a.getArtifact().toString().contains("budgetExhausted")));
+        verify(creationTaskService).completeTask(eq(33L), eq(true), anyInt(), anyLong());
+    }
+
     /** 构造规则校验结果（executedRules 非空代表规则确有执行） */
     private RuleCheckResult ruleResult(RuleViolation blocking) {
         RuleCheckResult result = new RuleCheckResult();
