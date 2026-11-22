@@ -42,4 +42,10 @@ public class WriterContext implements Serializable {
 
     /** 章节大纲（REFINED/PRECISE；可空=Planner 降级直写） */
     private ChapterOutline outline;
+
+    /**
+     * RAG 召回数上限（M5-F1：L1 预算档召回减半的传递通道；null = 默认召回数）。
+     * 由编排器在预算预警时注入，装配器不感知预算。
+     */
+    private Integer ragTopLimit;
 }

@@ -85,6 +85,27 @@ public class CreationTaskServiceImpl extends ServiceImpl<CreationTaskMapper, Cre
         updateById(task);
     }
 
+    @Override
+    public long sumBookTokens(Long bookId) {
+        if (bookId == null) {
+            return 0;
+        }
+        try {
+            // 聚合在库侧完成；FAILED 任务的消耗同样计入（烧掉的钱不因任务失败而消失）
+            java.util.List<Object> rows = this.listObjs(
+                    new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<CreationTask>()
+                            .select("COALESCE(SUM(total_tokens), 0)")
+                            .eq("book_id", bookId));
+            if (rows == null || rows.isEmpty() || rows.get(0) == null) {
+                return 0;
+            }
+            return ((Number) rows.get(0)).longValue();
+        } catch (Exception e) {
+            log.warn("书级 token 汇总失败（预算查询按 0 处理）: bookId={}, error={}", bookId, e.getMessage());
+            return 0;
+        }
+    }
+
     private static String truncate(String error) {
         if (error == null) {
             return null;

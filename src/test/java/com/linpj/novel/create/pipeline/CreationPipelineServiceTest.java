@@ -1136,4 +1136,153 @@ class CreationPipelineServiceTest {
         verify(creationTaskService).completeTask(eq(53L), eq(true), anyInt(), anyLong());
         verify(creationTaskService, never()).failTask(any(), any());
     }
+
+    // ------------------------------------------------------------------
+    // M5-F1 / E6：预算三级链与 L1–L4 降级阶梯（不可配置关闭）
+    // ------------------------------------------------------------------
+
+    /** 注入小预算的服务实例（时延维置 0 = 禁用，保证用例确定性） */
+    private CreationPipelineService serviceWithChapterBudget(long chapterMaxTokens, long bookMaxTokens) {
+        com.linpj.novel.create.config.PipelineBudgetProperties budget =
+                new com.linpj.novel.create.config.PipelineBudgetProperties();
+        budget.getChapter().setMaxTokens(chapterMaxTokens);
+        budget.getChapter().setMaxElapsedMs(0);
+        budget.getBook().setMaxTokens(bookMaxTokens);
+        return new CreationPipelineService(writerAgent, criticAgent, plannerAgent, polisherAgent,
+                creationTaskService, artifactMapper, contextAssemblyService, plotThreadService,
+                outlineStoreService, creationEventProducer, pipelineFeatures, ruleChecker,
+                ruleExemptionService, null, null, budget);
+    }
+
+    @Test
+    void F1_书级硬上限超限拒绝启动转人工() {
+        CreationPipelineService svc = serviceWithChapterBudget(1_000_000, 1_000);
+        when(creationTaskService.sumBookTokens(1L)).thenReturn(2_000L);
+
+        svc.runAsync(61L, request(CreationMode.FAST));
+
+        // 书级=跨任务持久预算：超限拒绝启动（烧穿预算前停笔），已完成章节/任务不受影响
+        verify(writerAgent, never()).write(any(), any());
+        verify(creationTaskService).failTask(eq(61L), contains("书级预算"));
+        verify(creationTaskService, never()).completeTask(any(), anyBoolean(), anyInt(), anyLong());
+    }
+
+    @Test
+    void F1_书级水量告警不拦截() {
+        CreationPipelineService svc = serviceWithChapterBudget(1_000_000, 1_000);
+        when(creationTaskService.sumBookTokens(1L)).thenReturn(900L); // 90% > 80% 水位
+        stubWriterContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("正文", 100L));
+
+        svc.runAsync(62L, request(CreationMode.FAST));
+
+        // 告警留痕（日志）但不拦：FAST 照常出章
+        verify(writerAgent).write(any(), any());
+        verify(creationTaskService).completeTask(eq(62L), eq(false), anyInt(), anyLong());
+    }
+
+    @Test
+    void F1_L4止损_首审前停笔产物保留转人工() {
+        // 首写后 usage=100 > 50×1.2 → L4：Critic 首审前停笔（正文已在 artifact）
+        CreationPipelineService svc = serviceWithChapterBudget(50, 1_000_000);
+        stubWriterContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("正文", 100L));
+
+        svc.runAsync(63L, request(CreationMode.STANDARD));
+
+        verify(criticAgent, never()).review(any());
+        verify(creationTaskService).failTask(eq(63L), contains("L4"));
+        verify(creationTaskService, never()).completeTask(any(), anyBoolean(), anyInt(), anyLong());
+    }
+
+    @Test
+    void F1_L4止损_开关全开也关不掉TC30() {
+        // TC-30 扩展：五个消融开关全开，预算止损语义不变——预算不在开关域
+        CreationPipelineService svc = serviceWithChapterBudget(50, 1_000_000);
+        stubWriterContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("正文", 100L));
+
+        svc.runAsync(64L, allSwitchesOn(CreationMode.STANDARD));
+
+        verify(criticAgent, never()).review(any());
+        verify(creationTaskService).failTask(eq(64L), contains("L4"));
+    }
+
+    @Test
+    void F1_L3触顶_跳Critic保规则校验与安全防线() {
+        // 100/100 = 1.0 → L3：Critic 让路，RuleChecker 与 gate 保留（P6 永不为预算让步）
+        CreationPipelineService svc = serviceWithChapterBudget(100, 1_000_000);
+        stubWriterContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("正文", 100L));
+        when(ruleChecker.check(any())).thenReturn(ruleResult(null));
+        PipelineRequest req = request(CreationMode.STANDARD);
+        req.setFeatures(Map.of("ruleRouting", true)); // 规则通道开着才能验证它没被跳过
+
+        svc.runAsync(65L, req);
+
+        verify(criticAgent, never()).review(any()); // Critic 让路
+        verify(ruleChecker).check(any()); // 硬校验保留
+        // 降级标记冒泡：任务完成但 degraded=true
+        verify(creationTaskService).completeTask(eq(65L), eq(true), anyInt(), anyLong());
+        verify(creationTaskService, never()).failTask(any(), any());
+    }
+
+    @Test
+    void F1_L2紧缩_仅修HIGH关闭MEDIUM重写通道() {
+        // 首写 100/110 ≈ 0.91 → L2：K=1 且仅 HIGH 触发重写——MEDIUM-only 未过稿直接出章（unmet 降级）
+        CreationPipelineService svc = serviceWithChapterBudget(110, 1_000_000);
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any()))
+                .thenReturn(new CriticAgent.ReviewResult(report(false, 6, issue("MEDIUM", "STYLE_DRIFT")), 5L));
+
+        svc.runAsync(66L, request(CreationMode.STANDARD));
+
+        verify(writerAgent, never()).rewrite(any(), anyString(), any(), anyInt(), any());
+        verify(creationTaskService).completeTask(eq(66L), eq(true), anyInt(), anyLong());
+    }
+
+    @Test
+    void F1_L2紧缩_HIGH问题仍强制重写一轮() {
+        // 首写 100/110 ≈ 0.91 → L2：只关 MEDIUM 通道，致命问题（HIGH）照样修——质量底线不随预算下降
+        CreationPipelineService svc = serviceWithChapterBudget(110, 1_000_000);
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(writerAgent.rewrite(any(), eq("d1"), any(), eq(1), any()))
+                .thenReturn(new WriterAgent.WriteResult("d2", 3L));
+        when(criticAgent.review(any()))
+                .thenReturn(new CriticAgent.ReviewResult(report(false, 5, issue("HIGH", "PLOT_HOLE")), 5L));
+
+        svc.runAsync(67L, request(CreationMode.STANDARD));
+
+        verify(writerAgent, times(1)).rewrite(any(), eq("d1"), any(), eq(1), any());
+        // K=1：第二轮不再重写（round=2 > roundsLimit=1）
+        verify(creationTaskService).completeTask(eq(67L), eq(true), anyInt(), anyLong());
+    }
+
+    @Test
+    void F1_L1预警_PRECISE关bestof降单稿链路() {
+        // Planner 105/125 = 0.84 → L1：PRECISE 双稿关闭，降级 REFINED 主干（不重跑 Planner）
+        CreationPipelineService svc = serviceWithChapterBudget(125, 1_000_000);
+        stubWriterContext();
+        stubCriticContext();
+        stubPlannerContext();
+        when(plannerAgent.plan(any())).thenReturn(new PlannerAgent.PlanResult(outline(), 105L));
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 10L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 5L));
+        when(polisherAgent.polish(any(), any(), any()))
+                .thenReturn(new PolisherAgent.PolishResult("润色稿", 5L));
+        when(criticAgent.verifyPolish(any(), anyString()))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 9), 3L));
+
+        svc.runAsync(68L, request(CreationMode.PRECISE));
+
+        // 单稿链路：writeVariant（双稿入口）零调用，普通 write 一次；Planner 只跑一次（降级不烧预算）
+        verify(writerAgent, never()).writeVariant(any(), anyInt(), any());
+        verify(writerAgent, times(1)).write(any(), any());
+        verify(plannerAgent, times(1)).plan(any());
+        verify(creationTaskService).completeTask(eq(68L), eq(true), anyInt(), anyLong());
+    }
 }

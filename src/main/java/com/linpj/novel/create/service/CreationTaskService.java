@@ -29,4 +29,10 @@ public interface CreationTaskService extends IService<CreationTask> {
 
     /** 推进当前阶段（断点续跑预留） */
     void advanceStage(Long taskId, String currentStage);
+
+    /**
+     * 书级预算口径：该书全部任务（含 FAILED）的 token 总消耗（M5-F1 书级硬上限的查询依赖）。
+     * 容错语义：bookId 为空 / 查询异常返回 0（预算查询故障不应拦死创作入口）。
+     */
+    long sumBookTokens(Long bookId);
 }

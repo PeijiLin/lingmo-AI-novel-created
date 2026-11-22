@@ -32,17 +32,29 @@ public class RagAdvisorFactory {
     }
 
     /**
-     * 构建按 bookId 过滤的检索增强 advisor
+     * 构建按 bookId 过滤的检索增强 advisor（默认召回数，现状行为）
      */
     public RetrievalAugmentationAdvisor forBook(Long bookId) {
+        return forBook(bookId, null);
+    }
+
+    /**
+     * 构建按 bookId 过滤的检索增强 advisor（M5-F1：L1 预算档召回数减半的执行入口）。
+     *
+     * @param topK 召回数上限（null = 检索器默认值，行为与单参重载完全一致）
+     */
+    public RetrievalAugmentationAdvisor forBook(Long bookId, Integer topK) {
+        VectorStoreDocumentRetriever.Builder builder = VectorStoreDocumentRetriever.builder()
+                .vectorStore(vectorStore)
+                .filterExpression(() -> new Filter.Expression(
+                        Filter.ExpressionType.EQ,
+                        new Filter.Key("metadata.bookId"),
+                        new Filter.Value(bookId)));
+        if (topK != null && topK > 0) {
+            builder.topK(topK);
+        }
         return RetrievalAugmentationAdvisor.builder()
-                .documentRetriever(VectorStoreDocumentRetriever.builder()
-                        .vectorStore(vectorStore)
-                        .filterExpression(() -> new Filter.Expression(
-                                Filter.ExpressionType.EQ,
-                                new Filter.Key("metadata.bookId"),
-                                new Filter.Value(bookId)))
-                        .build())
+                .documentRetriever(builder.build())
                 .queryAugmenter(this::augmentQuery)
                 .build();
     }

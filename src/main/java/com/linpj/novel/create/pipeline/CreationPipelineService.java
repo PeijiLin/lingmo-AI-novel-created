@@ -4,6 +4,7 @@ import com.linpj.novel.create.agent.CriticAgent;
 import com.linpj.novel.create.agent.PlannerAgent;
 import com.linpj.novel.create.agent.PolisherAgent;
 import com.linpj.novel.create.agent.WriterAgent;
+import com.linpj.novel.create.config.PipelineBudgetProperties;
 import com.linpj.novel.create.config.PipelineFeatures;
 import com.linpj.novel.create.mapper.novel.CreationStageArtifactMapper;
 import com.linpj.novel.create.pojo.entity.CreationStageArtifact;
@@ -105,6 +106,9 @@ public class CreationPipelineService {
     /** 修订循环预算比（M3-D3：修订累计 token 超首写 40% 强制出循环；S10 校准前的相对口径） */
     private static final double REVISION_BUDGET_RATIO = 0.40;
 
+    /** RAG 默认召回数（Spring AI VectorStoreDocumentRetriever 默认值；M5-F1 L1 档减半的基数） */
+    static final int DEFAULT_RAG_TOP_K = 4;
+
     /** PRECISE 双稿总超时（两稿并行，对齐单稿 Writer 180s） */
     private static final Duration DUAL_DRAFT_TIMEOUT = Duration.ofSeconds(180);
 
@@ -123,6 +127,8 @@ public class CreationPipelineService {
     private final RuleExemptionService ruleExemptionService;
     private final FinalDraftGate finalDraftGate;
     private final StreamSafetyGate streamSafetyGate;
+    /** 预算守卫配置（M5-F1：不可关闭，仅数值可配——降级语义为代码常量） */
+    private final PipelineBudgetProperties budgetProperties;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -181,25 +187,48 @@ public class CreationPipelineService {
     }
 
     /**
-     * 生产装配（Spring 唯一注入点）：含定稿前安全 gate（M4-E3）与中置流式拦截（M4-E2）。
-     * 安全层不可让渡（P6）：两层恒装配，词表为空即命中恒为空，不存在关闭开关。
+     * 兼容构造（测试/离线装配）：预算守卫不可关闭，默认数值实例兜底——
+     * 无预算环境（单测）仍持有守卫（默认 20 万 token/10 分钟，远高于测试用量，不触发降级）。
      */
+    CreationPipelineService(WriterAgent writerAgent,
+                                     CriticAgent criticAgent,
+                                     PlannerAgent plannerAgent,
+                                     PolisherAgent polisherAgent,
+                                     CreationTaskService creationTaskService,
+                                     CreationStageArtifactMapper artifactMapper,
+                                     ContextAssemblyService contextAssemblyService,
+                                     PlotThreadService plotThreadService,
+                                     ChapterOutlineStoreService outlineStoreService,
+                                     CreationEventProducer creationEventProducer,
+                                     PipelineFeatures pipelineFeatures,
+                                     RuleChecker ruleChecker,
+                                     RuleExemptionService ruleExemptionService,
+                                     FinalDraftGate finalDraftGate,
+                                     StreamSafetyGate streamSafetyGate) {
+        this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
+                contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
+                pipelineFeatures, ruleChecker, ruleExemptionService, finalDraftGate, streamSafetyGate,
+                new PipelineBudgetProperties());
+    }
+
+    /** 生产装配（Spring 唯一注入点）：含定稿前安全 gate（M4-E3）、中置流式拦截（M4-E2）与预算守卫（M5-F1）。 */
     @Autowired
     public CreationPipelineService(WriterAgent writerAgent,
-                                    CriticAgent criticAgent,
-                                    PlannerAgent plannerAgent,
-                                    PolisherAgent polisherAgent,
-                                    CreationTaskService creationTaskService,
-                                    CreationStageArtifactMapper artifactMapper,
-                                    ContextAssemblyService contextAssemblyService,
-                                    PlotThreadService plotThreadService,
-                                    ChapterOutlineStoreService outlineStoreService,
-                                    CreationEventProducer creationEventProducer,
-                                    PipelineFeatures pipelineFeatures,
-                                    RuleChecker ruleChecker,
-                                    RuleExemptionService ruleExemptionService,
-                                    FinalDraftGate finalDraftGate,
-                                    StreamSafetyGate streamSafetyGate) {
+                                     CriticAgent criticAgent,
+                                     PlannerAgent plannerAgent,
+                                     PolisherAgent polisherAgent,
+                                     CreationTaskService creationTaskService,
+                                     CreationStageArtifactMapper artifactMapper,
+                                     ContextAssemblyService contextAssemblyService,
+                                     PlotThreadService plotThreadService,
+                                     ChapterOutlineStoreService outlineStoreService,
+                                     CreationEventProducer creationEventProducer,
+                                     PipelineFeatures pipelineFeatures,
+                                     RuleChecker ruleChecker,
+                                     RuleExemptionService ruleExemptionService,
+                                     FinalDraftGate finalDraftGate,
+                                     StreamSafetyGate streamSafetyGate,
+                                     PipelineBudgetProperties budgetProperties) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -215,6 +244,7 @@ public class CreationPipelineService {
         this.ruleExemptionService = ruleExemptionService;
         this.finalDraftGate = finalDraftGate;
         this.streamSafetyGate = streamSafetyGate;
+        this.budgetProperties = budgetProperties;
     }
 
     // ------------------------------------------------------------------
@@ -276,27 +306,94 @@ public class CreationPipelineService {
     private void executePipeline(PipelineRequest request, Long taskId, ProgressEmitter emitter) {
         long startAt = System.currentTimeMillis();
         StageUsage usage = new StageUsage();
-        boolean degraded;
+        boolean degraded = false;
         // 运行时开关一次性解析（与落库快照同源）：后续各节点按此执行（v2.0 设计 7.1）
         Map<String, Boolean> features = pipelineFeatures.merged(request.getFeatures());
+        // 预算守卫（M5-F1 三级链之首）：书级硬上限校验（超限拒绝启动）+ 章级会话打开。
+        // 守卫不可关闭（TC-30 契约）：预算数值可配，降级语义是代码常量；
+        // 书级超限由状态机 catch 转 failTask（未完成报告随 error 转人工），与 L4 止损同一路径
+        boolean failed = false;
         try {
+            ChapterBudget budget = openChapterBudget(request, usage, startAt);
             switch (request.getMode()) {
                 case FAST -> degraded = runFast(request, taskId, emitter, usage);
-                case STANDARD -> degraded = runStandard(request, taskId, emitter, usage, features);
-                case REFINED -> degraded = runRefined(request, taskId, emitter, usage, features);
-                case PRECISE -> degraded = runPrecise(request, taskId, emitter, usage, features);
+                case STANDARD -> degraded = runStandard(request, taskId, emitter, usage, features, budget);
+                case REFINED -> degraded = runRefined(request, taskId, emitter, usage, features, budget);
+                case PRECISE -> degraded = runPrecise(request, taskId, emitter, usage, features, budget);
                 default -> throw new IllegalArgumentException("不支持的模式: " + request.getMode());
             }
+        } catch (Exception e) {
+            failed = true;
+            log.error("管道执行失败: taskId={}, mode={}", taskId, request.getMode(), e);
+            emitter.emitStage(StageEvent.failed(e.getMessage()));
+            creationTaskService.failTask(taskId, e.getMessage());
+        }
+        if (!failed) {
             usage.setElapsedMs(System.currentTimeMillis() - startAt);
             emitter.emitStage(StageEvent.completed(degraded, usage));
             creationTaskService.completeTask(taskId, degraded,
                     Math.toIntExact(Math.min(Integer.MAX_VALUE, usage.getTotalTokens())), usage.getElapsedMs());
-        } catch (Exception e) {
-            log.error("管道执行失败: taskId={}, mode={}", taskId, request.getMode(), e);
-            emitter.emitStage(StageEvent.failed(e.getMessage()));
-            creationTaskService.failTask(taskId, e.getMessage());
-        } finally {
-            emitter.complete();
+        }
+        emitter.complete();
+    }
+
+    // ------------------------------------------------------------------
+    // 预算守卫（M5-F1：书级硬上限 -> 章级两维会话；轮级 40% 在重写回路）
+    // ------------------------------------------------------------------
+
+    /**
+     * 书级预算校验 + 打开章级会话：
+     * - 硬上限：该书累计 token（含 FAILED 任务）超上限 → 拒绝启动（executePipeline 兜底转 failTask，
+     *   已完成的章节不受影响）；与安全层同属不可让渡域——烧穿预算前先停笔。
+     * - 80% 水位：告警留痕（预算事件日志；结构化落账随 B3 checkpoint 节点留痕一起收口）。
+     * - 查询容错：聚合失败按 0 处理——预算是守卫不是闸门，查询故障不拦死创作（失败率与误拦的取舍）。
+     */
+    private ChapterBudget openChapterBudget(PipelineRequest request, StageUsage usage, long startAt) {
+        long bookTokens = 0;
+        if (request.getBookId() != null) {
+            try {
+                bookTokens = creationTaskService.sumBookTokens(request.getBookId());
+            } catch (Exception e) {
+                log.warn("书级预算查询失败（按 0 处理）: bookId={}", request.getBookId());
+            }
+        }
+        long bookMax = budgetProperties.getBook().getMaxTokens();
+        if (bookMax > 0 && bookTokens > bookMax) {
+            throw new BudgetExhaustedException(String.format(
+                    "书级预算硬上限已耗尽: bookId=%s, 已用 %d / 上限 %d tokens——"
+                            + "新章生成被拒绝（已完成章节不受影响）；续写请上调预算或重算统计",
+                    request.getBookId(), bookTokens, bookMax));
+        }
+        if (bookMax > 0 && bookTokens > bookMax * BudgetLevel.ALERT_RATIO) {
+            log.warn("书级预算接近上限（水位告警）: bookId={}, 已用 {} / {} tokens",
+                    request.getBookId(), bookTokens, bookMax);
+        }
+        return new ChapterBudget(budgetProperties.getChapter(), usage, startAt);
+    }
+
+    /**
+     * 生成节点前置检查：L4 止损——预算超限 20% 缓冲后停笔。
+     * 已完成产物保留（artifact 实时落库），failTask.error 携带预算报告转人工。
+     */
+    private static void guardForGeneration(ChapterBudget budget, Long taskId, String node) {
+        if (budget != null && budget.level().atLeast(BudgetLevel.L4)) {
+            throw new BudgetExhaustedException(String.format(
+                    "章级预算止损（L4）: taskId=%s, 节点=%s——停止后续生成，已完成产物已落库，转人工决策",
+                    taskId, node));
+        }
+    }
+
+    /**
+     * L1+ 预警下 RAG 召回数减半（保底 1）。注入 WriterContext 字段而非装配器——
+     * 预算是运行时状态，装配器保持账本职责单一。
+     */
+    private static void applyBudgetRagLimit(WriterContext context, ChapterBudget budget) {
+        if (context == null || budget == null) {
+            return;
+        }
+        int limit = budget.ragTopLimit(DEFAULT_RAG_TOP_K);
+        if (limit < DEFAULT_RAG_TOP_K) {
+            context.setRagTopLimit(limit);
         }
     }
 
@@ -328,8 +425,8 @@ public class CreationPipelineService {
     // ------------------------------------------------------------------
 
     private boolean runStandard(PipelineRequest request, Long taskId, ProgressEmitter emitter,
-                                StageUsage usage, Map<String, Boolean> features) {
-        DraftOutcome outcome = runWriterCriticLoop(request, taskId, emitter, usage, null, 1, 2, features);
+                                 StageUsage usage, Map<String, Boolean> features, ChapterBudget budget) {
+        DraftOutcome outcome = runWriterCriticLoop(request, taskId, emitter, usage, null, 1, 2, features, budget);
         // 定稿前安全 gate（M4-E3）
         GatedDraft gated = gateBeforeFinalize(request, taskId, null, outcome.draft());
         if (gated.repaired()) {
@@ -337,7 +434,7 @@ public class CreationPipelineService {
             emitter.emitContent(gated.text());
         }
         settlePlotLedger(request, gated.text());
-        return outcome.degraded();
+        return outcome.degraded() || (budget != null && budget.degraded());
     }
 
     // ------------------------------------------------------------------
@@ -345,20 +442,27 @@ public class CreationPipelineService {
     // ------------------------------------------------------------------
 
     private boolean runRefined(PipelineRequest request, Long taskId, ProgressEmitter emitter,
-                               StageUsage usage, Map<String, Boolean> features) {
+                               StageUsage usage, Map<String, Boolean> features, ChapterBudget budget) {
         final int total = 4; // PLANNING + WRITING + CRITIC + POLISHING
-
         // —— Planner（序号 1）——
         PlanOutcome plan = runPlanning(request, taskId, emitter, usage, total, features);
+        return runRefinedWithPlan(request, taskId, emitter, usage, features, budget, plan, total);
+    }
 
+    /** REFINED 主干（已持有 Planner 产物；PRECISE 预算降级复用此路径且不重跑 Planner） */
+    private boolean runRefinedWithPlan(PipelineRequest request, Long taskId, ProgressEmitter emitter,
+                                       StageUsage usage, Map<String, Boolean> features, ChapterBudget budget,
+                                       PlanOutcome plan, int total) {
         // —— Writer -> Critic 闭环（Writer 序号 2，Critic 序号 3）——
-        DraftOutcome outcome = runWriterCriticLoop(request, taskId, emitter, usage, plan.outline(), 2, total, features);
+        DraftOutcome outcome = runWriterCriticLoop(request, taskId, emitter, usage, plan.outline(), 2, total, features, budget);
 
         // —— 伏笔记账 + Polisher（序号 4）——
         settleLedger(request, plan.outline(), outcome.draft());
         // 先求值再或：|| 短路会跳过 Polisher（Planner 降级时正文已写出，润色仍需执行）
-        boolean polishDegraded = runPolishing(request, taskId, emitter, usage, plan.outline(), outcome.draft());
-        return plan.degraded() || outcome.degraded() || polishDegraded;
+        boolean polishDegraded = runPolishing(request, taskId, emitter, usage, plan.outline(), outcome.draft(), budget);
+        // 预算降级（L3 跳 Critic/Polisher、L1 关 best-of 等）合并冒泡
+        boolean budgetDegraded = budget != null && budget.degraded();
+        return plan.degraded() || outcome.degraded() || polishDegraded || budgetDegraded;
     }
 
     // ------------------------------------------------------------------
@@ -366,7 +470,7 @@ public class CreationPipelineService {
     // ------------------------------------------------------------------
 
     private boolean runPrecise(PipelineRequest request, Long taskId, ProgressEmitter emitter,
-                               StageUsage usage, Map<String, Boolean> features) {
+                               StageUsage usage, Map<String, Boolean> features, ChapterBudget budget) {
         final int total = 4;
         boolean degraded = false;
 
@@ -374,10 +478,23 @@ public class CreationPipelineService {
         PlanOutcome plan = runPlanning(request, taskId, emitter, usage, total, features);
         degraded = degraded || plan.degraded();
 
+        // L1+ 预警：关 best-of（设计 5.4）——PRECISE 降级为 REFINED 单稿链路。
+        // 检查点在 Planner 之后：预算感知需要已发生的消耗（入口时 usage 恒 0 判不出档位）。
+        // 双稿是成本最贵的档位，预算紧张时第一个让路；安全防线与规则校验不受影响（它们本就在两条链路上等价存在）
+        if (budget != null && budget.level().atLeast(BudgetLevel.L1)) {
+            log.warn("预算预警（L1+）：PRECISE 关闭 best-of，降级为 REFINED 单稿链路: taskId={}", taskId);
+            budget.markDegraded();
+            // 复用 REFINED 主干（已持有 Planner 产物，不再重复规划——降级路径不烧预算）
+            return runRefinedWithPlan(request, taskId, emitter, usage, features, budget, plan, total);
+        }
+
         // —— 并行双稿（N=2：标准稿流式转发，变体稿静默聚合）——
+        // 预算止损（L4）：双稿是成本最贵的路径，开写前先拦（已完成 Planner 产物保留落库）
+        guardForGeneration(budget, taskId, "PRECISE 双稿");
         emitter.emitStage(StageEvent.started(StageCode.WRITING, 2, total));
         creationTaskService.advanceStage(taskId, StageCode.WRITING.name());
         WriterContext writerContext = contextAssemblyService.assembleWriterContext(request, plan.outline());
+        applyBudgetRagLimit(writerContext, budget);
 
         // 双稿都过 STREAM 层（M4-E2）：A 稿边写边发，B 稿静默聚合——
         // 若胜出的是 B 稿，其正文同样要"先拦后发"（否则择优回退的整稿重发就是绕过点）
@@ -426,26 +543,36 @@ public class CreationPipelineService {
         }
 
         // —— 双 Critic 择优 ——
+        // 预算止损（L4）：超限后连择优评审的钱也不花（A/B 稿正文均已在 artifact，转人工比对）；
+        // 预算触顶（L3）：跳过择优评审（与单稿链路同语义：Critic 让路，规则与安全保留）
+        guardForGeneration(budget, taskId, "PRECISE 择优评审");
+        CriticAgent.ReviewResult reviewA;
+        if (budget != null && budget.level().atLeast(BudgetLevel.L3)) {
+            log.warn("预算触顶（L3）：PRECISE 跳过双 Critic 择优，保序取 A 稿: taskId={}", taskId);
+            budget.markDegraded();
+            reviewA = degradedPassReview("预算触顶 L3：跳过择优评审，采用 A 稿");
+        } else {
+            reviewA = reviewDraft(request, resultA.text(), plan.outline());
+        }
         // ADR-6（v2.0 M3-D2，评审 N1 必改）：convergenceGuard 开启时选优用成对比较（同批评审消除跨调用绝对分漂移），
         // 关闭时保持现状绝对分比较（TIE 取 A 避免抖动）；绝对分仅继续作为通过的门槛判定
         emitter.emitStage(StageEvent.started(StageCode.CRITIC, 3, total));
         creationTaskService.advanceStage(taskId, StageCode.CRITIC.name());
-        CriticAgent.ReviewResult reviewA = reviewDraft(request, resultA.text(), plan.outline());
         saveArtifact(taskId, StageCode.WRITING, 1, Map.of("text", resultA.text(), "variant", 1), resultA.tokens());
         usage.addTokens(resultA.tokens());
         CriticAgent.ReviewResult reviewB;
-        if (resultB != null) {
+        if (resultB != null && !(budget != null && budget.level().atLeast(BudgetLevel.L3))) {
             reviewB = reviewDraft(request, resultB.text(), plan.outline());
             saveArtifact(taskId, StageCode.WRITING, PRECISE_REJECTED_ROUND,
                     Map.of("text", resultB.text(), "variant", 2, "note", "precise-rejected"), resultB.tokens());
             usage.addTokens(resultB.tokens());
         } else {
-            reviewB = null; // 单稿降级
+            reviewB = null; // 单稿降级 / 预算触顶（L3 评审降级）
         }
         usage.setStages(usage.getStages() + 1);
 
-        boolean bWins;
-        if (Boolean.TRUE.equals(features.get("convergenceGuard")) && resultB != null) {
+        boolean bWins = false;
+        if (Boolean.TRUE.equals(features.get("convergenceGuard")) && resultB != null && reviewB != null) {
             CriticAgent.CompareResult verdict =
                     compareDrafts(request, usage, plan.outline(), resultA.text(), resultB.text());
             bWins = verdict.bWins();
@@ -454,6 +581,10 @@ public class CreationPipelineService {
                     verdict.tokens());
         } else {
             bWins = reviewB != null && scoreOf(reviewB.report()) > scoreOf(reviewA.report());
+        }
+        if (reviewB == null) {
+            // B 稿未评审（单稿降级或预算触顶）：无比较基准，保守取 A 稿（与 TIE 保守语义一致）
+            bWins = false;
         }
         String selectedDraft = (bWins ? resultB : resultA).text();
         CriticAgent.ReviewResult selectedReview = bWins ? reviewB : reviewA;
@@ -472,13 +603,14 @@ public class CreationPipelineService {
                 reviewWithRules(request, taskId, selectedDraft, plan.outline(), selectedReview, features);
         long selectedWriteTokens = (bWins ? resultB : resultA).tokens();
         DraftOutcome outcome = rewriteLoop(request, taskId, emitter, usage, plan.outline(),
-                writerContext, selectedDraft, selectedWithRules.report(), 2, total, features, selectedWriteTokens);
+                writerContext, selectedDraft, selectedWithRules.report(), 2, total, features, selectedWriteTokens, budget);
 
         // —— 伏笔记账 + Polisher（序号 4）——
         settleLedger(request, plan.outline(), outcome.draft());
         // 先求值再或：|| 短路会跳过 Polisher（Planner/双稿降级时正文已写出，润色仍需执行）
-        boolean polishDegraded = runPolishing(request, taskId, emitter, usage, plan.outline(), outcome.draft());
-        return degraded || outcome.degraded() || polishDegraded;
+        boolean polishDegraded = runPolishing(request, taskId, emitter, usage, plan.outline(), outcome.draft(), budget);
+        boolean budgetDegraded = budget != null && budget.degraded();
+        return degraded || outcome.degraded() || polishDegraded || budgetDegraded;
     }
 
     private static int scoreOf(ReviewReport report) {
@@ -523,7 +655,15 @@ public class CreationPipelineService {
      * ——保证客户端看到的终稿与服务端采纳的终稿一致（否则复核失败的润色稿会残留在前端缓冲里被保存）。
      */
     private boolean runPolishing(PipelineRequest request, Long taskId, ProgressEmitter emitter,
-                                 StageUsage usage, ChapterOutline outline, String draft) {
+                                 StageUsage usage, ChapterOutline outline, String draft, ChapterBudget budget) {
+        // 预算触顶（L3/L4）：Polisher 让路（纯语言层增益，不产生新内容）——
+        // 与"生成节点 L4 抛异常"的分层原则：L4 只拦"未产生新正文"的生成（Writer/评审/重写）；
+        // 此处正文已完成，跳润色直接出章是最优止损形态（比任务失败对作者更有利）
+        if (budget != null && budget.level().atLeast(BudgetLevel.L3)) {
+            log.warn("预算触顶（L3）：跳过 Polisher，直接采用原稿: taskId={}", taskId);
+            budget.markDegraded();
+            return true;
+        }
         emitter.emitStage(StageEvent.started(StageCode.POLISHING, 4, 4));
         creationTaskService.advanceStage(taskId, StageCode.POLISHING.name());
         try {
@@ -584,20 +724,32 @@ public class CreationPipelineService {
      */
     private DraftOutcome runWriterCriticLoop(PipelineRequest request, Long taskId, ProgressEmitter emitter,
                                              StageUsage usage, ChapterOutline outline, int writerIndex,
-                                             int total, Map<String, Boolean> features) {
+                                             int total, Map<String, Boolean> features, ChapterBudget budget) {
         // —— Writer 首轮 ——
+        guardForGeneration(budget, taskId, "Writer 首写"); // 预算止损（L4）：Planner 产物已落库，转人工
         emitter.emitStage(StageEvent.started(StageCode.WRITING, writerIndex, total));
         creationTaskService.advanceStage(taskId, StageCode.WRITING.name());
         WriterContext writerContext = contextAssemblyService.assembleWriterContext(request, outline);
+        applyBudgetRagLimit(writerContext, budget); // L1+ 预警：RAG 召回减半
         WriterAgent.WriteResult writeResult = writeWithRetry(writerContext, emitter, null, null);
         saveArtifact(taskId, StageCode.WRITING, 1, Map.of("text", writeResult.text()), writeResult.tokens());
         usage.addTokens(writeResult.tokens());
         usage.setStages(usage.getStages() + 1);
 
         // —— Critic 首审（N5 规则校验并入：阻塞级 HIGH 违规与 Critic 问题同构参与重写触发）——
+        // 预算止损（L4）：连评审的钱也不花（超限 20% 后停笔——正文已在 artifact，转人工）；
+        // 预算触顶（L3）：Critic 让路（硬校验与安全防线继续；RuleChecker 在 reviewWithRules 内不受预算影响）
+        guardForGeneration(budget, taskId, "Critic 首审");
         emitter.emitStage(StageEvent.started(StageCode.CRITIC, writerIndex + 1, total));
         creationTaskService.advanceStage(taskId, StageCode.CRITIC.name());
-        CriticAgent.ReviewResult baseReview = reviewDraft(request, writeResult.text(), outline);
+        CriticAgent.ReviewResult baseReview;
+        if (budget != null && budget.level().atLeast(BudgetLevel.L3)) {
+            log.warn("预算触顶（L3）：跳过 Critic 首审（降级），规则校验与安全防线保留: taskId={}", taskId);
+            budget.markDegraded();
+            baseReview = degradedPassReview("预算触顶 L3：跳过首审（评审降级保护）");
+        } else {
+            baseReview = reviewDraft(request, writeResult.text(), outline);
+        }
         CriticAgent.ReviewResult firstReview =
                 reviewWithRules(request, taskId, writeResult.text(), outline, baseReview, features);
         saveArtifact(taskId, StageCode.CRITIC, 1, firstReview.report(), firstReview.tokens());
@@ -605,7 +757,7 @@ public class CreationPipelineService {
         usage.setStages(usage.getStages() + 1);
 
         return rewriteLoop(request, taskId, emitter, usage, outline, writerContext,
-                writeResult.text(), firstReview.report(), writerIndex, total, features, writeResult.tokens());
+                writeResult.text(), firstReview.report(), writerIndex, total, features, writeResult.tokens(), budget);
     }
 
     /**
@@ -624,7 +776,7 @@ public class CreationPipelineService {
     private DraftOutcome rewriteLoop(PipelineRequest request, Long taskId, ProgressEmitter emitter,
                                      StageUsage usage, ChapterOutline outline, WriterContext writerContext,
                                      String draft, ReviewReport firstReport, int writerIndex, int total,
-                                     Map<String, Boolean> features, long baseWriteTokens) {
+                                     Map<String, Boolean> features, long baseWriteTokens, ChapterBudget budget) {
         boolean guard = Boolean.TRUE.equals(features.get("convergenceGuard"));
         ReviewReport report = firstReport;
         String bestDraft = draft;
@@ -634,7 +786,26 @@ public class CreationPipelineService {
         boolean rolledBack = false;
         boolean budgetExhausted = false;
         int round = 1;
-        while (!report.isApproved() && round <= request.getMaxRewriteRounds() && shouldRewrite(report, round)) {
+        // 预算紧缩（L2）：K=1 且仅修 HIGH（设计 5.4）——预算档位实时评估（重写前重算）
+        boolean tightenOnlyHigh = budget != null && budget.level().atLeast(BudgetLevel.L2);
+        if (tightenOnlyHigh) {
+            log.warn("预算紧缩（L2+）：重写轮数压至 K=1 且仅修 HIGH 问题: taskId={}", taskId);
+        }
+        int roundsLimit = tightenOnlyHigh ? 1 : request.getMaxRewriteRounds();
+        while (!report.isApproved() && round <= roundsLimit && shouldRewrite(report, round, tightenOnlyHigh)) {
+            // 章级预算档位（L2-L4，实时：每轮重写前重算）
+            if (budget != null) {
+                if (budget.level().atLeast(BudgetLevel.L4)) {
+                    throw new BudgetExhaustedException(String.format(
+                            "章级预算止损（L4）：修订循环第 %d 轮前停笔——已完成产物已落库，转人工决策", round));
+                }
+                if (budget.level().atLeast(BudgetLevel.L3)) {
+                    // 预算触顶（L3）：终止修订循环（当前稿出章，unmet 落账待人审）；规则与安全不受影响
+                    log.warn("预算触顶（L3）：终止修订循环（当前稿出章+unmet 落账）: taskId={}, round={}", taskId, round);
+                    budget.markDegraded();
+                    break;
+                }
+            }
             // 循环预算（M3-D3）：修订累计 token 超首写 40% -> 强制出循环（防无限烧钱，不可达 pass 时及时止损）
             if (guard && revisionTokens > REVISION_BUDGET_RATIO * baseWriteTokens) {
                 budgetExhausted = true;
@@ -715,13 +886,23 @@ public class CreationPipelineService {
 
     /**
      * 重写触发规则（设计 3.3）：
-     * 存在 HIGH -> 强制重写；仅 MEDIUM -> 附建议重写 1 轮；仅 LOW -> 直接通过
+     * 存在 HIGH -> 强制重写；仅 MEDIUM -> 附建议重写 1 轮；仅 LOW -> 直接通过。
+     * 预算紧缩（L2，M5-F1）：MEDIUM 触发通道关闭——只修致命问题，紧缩期不做打磨性重写。
      */
-    private boolean shouldRewrite(ReviewReport report, int round) {
+    private boolean shouldRewrite(ReviewReport report, int round, boolean onlyHigh) {
         if (report.hasHighIssue()) {
             return true;
         }
-        return report.hasMediumIssue() && round == 1;
+        return !onlyHigh && report.hasMediumIssue() && round == 1;
+    }
+
+    /** 预算触顶时的降级通过报告（approved=true + 降级标注，冒泡 degraded 由 budget.markDegraded 承担） */
+    private static CriticAgent.ReviewResult degradedPassReview(String summary) {
+        ReviewReport fallback = new ReviewReport();
+        fallback.setApproved(true);
+        fallback.setOverallScore(7);
+        fallback.setSummary(summary);
+        return new CriticAgent.ReviewResult(fallback, 0);
     }
 
     // ------------------------------------------------------------------
