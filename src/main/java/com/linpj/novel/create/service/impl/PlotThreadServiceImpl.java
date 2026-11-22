@@ -3,17 +3,22 @@ package com.linpj.novel.create.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.linpj.novel.create.mapper.novel.NovelPlotThreadMapper;
+import com.linpj.novel.create.pojo.entity.BookChapter;
 import com.linpj.novel.create.pojo.entity.NovelPlotThread;
 import com.linpj.novel.create.pojo.pipeline.PlotOperation;
+import com.linpj.novel.create.service.BookChapterService;
 import com.linpj.novel.create.service.PlotThreadService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -33,6 +38,20 @@ public class PlotThreadServiceImpl extends ServiceImpl<NovelPlotThreadMapper, No
 
     private static final String STATUS_OPEN = "OPEN";
     private static final String STATUS_RESOLVED = "RESOLVED";
+
+    /** 章号解析依赖（排期渲染的逾期判定用；未装配时排期降级为无逾期标注） */
+    private final BookChapterService bookChapterService;
+
+    /** 兼容构造（无章号解析依赖：B1-3 逾期标注降级——离线装配/测试用） */
+    public PlotThreadServiceImpl() {
+        this.bookChapterService = null;
+    }
+
+    /** 生产装配（Spring 唯一注入点） */
+    @Autowired
+    public PlotThreadServiceImpl(BookChapterService bookChapterService) {
+        this.bookChapterService = bookChapterService;
+    }
 
     @Override
     public List<NovelPlotThread> listActiveThreads(Long bookId) {
@@ -57,6 +76,60 @@ public class PlotThreadServiceImpl extends ServiceImpl<NovelPlotThreadMapper, No
                     .append(thread.getDescription()).append("\n");
         }
         return sb.toString();
+    }
+
+    @Override
+    public String renderPlannerThreads(Long bookId, Long currentChapterId) {
+        List<NovelPlotThread> threads = listActiveThreads(bookId);
+        if (threads.isEmpty()) {
+            return null;
+        }
+        Map<Long, Integer> chapterNums = loadChapterNums(bookId);
+        Integer currentNum = currentChapterId == null ? null : chapterNums.get(currentChapterId);
+        StringBuilder sb = new StringBuilder();
+        for (NovelPlotThread thread : threads) {
+            sb.append("[伏笔#").append(thread.getId()).append("] ")
+                    .append(thread.getDescription());
+            if (thread.getPlannedOffset() != null) {
+                sb.append("（计划约 ").append(thread.getPlannedOffset()).append(" 章后回收）");
+            }
+            if (thread.getDeadlineOffset() != null) {
+                sb.append("（须 ").append(thread.getDeadlineOffset()).append(" 章内回收）");
+                if (isOverdue(thread, currentNum, chapterNums)) {
+                    sb.append("【已逾期，本章应安排回收】");
+                }
+            }
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+    /** 逾期判定：当前章号 - 埋设章号 > 截止章距（章号缺失/解析失败不判定——宁可漏报不误报） */
+    private boolean isOverdue(NovelPlotThread thread, Integer currentNum, Map<Long, Integer> chapterNums) {
+        if (currentNum == null || thread.getDeadlineOffset() == null || thread.getPlantedChapterId() == null) {
+            return false;
+        }
+        Integer plantedNum = chapterNums.get(thread.getPlantedChapterId());
+        return plantedNum != null && (currentNum - plantedNum) > thread.getDeadlineOffset();
+    }
+
+    /** 本书章号映射（单查询；未装配/查询失败返回空映射——排期渲染降级为无逾期标注） */
+    private Map<Long, Integer> loadChapterNums(Long bookId) {
+        Map<Long, Integer> result = new HashMap<>();
+        if (bookChapterService == null || bookId == null) {
+            return result;
+        }
+        try {
+            for (BookChapter chapter : bookChapterService.list(new LambdaQueryWrapper<BookChapter>()
+                    .eq(BookChapter::getBookId, bookId))) {
+                if (chapter != null && chapter.getId() != null) {
+                    result.put(chapter.getId(), chapter.getChapterNum());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("章号映射加载失败（逾期标注降级）: bookId={}, error={}", bookId, e.getMessage());
+        }
+        return result;
     }
 
     @Override
@@ -115,9 +188,11 @@ public class PlotThreadServiceImpl extends ServiceImpl<NovelPlotThreadMapper, No
         thread.setStatus(STATUS_OPEN);
         thread.setWhoKnows(op.getWhoKnows());
         thread.setSecretKey(trimToNull(op.getSecretKey()));
+        thread.setPlannedOffset(op.getPlannedIn());
+        thread.setDeadlineOffset(op.getDeadlineIn());
         this.save(thread);
-        log.info("伏笔入账[PLANT]: bookId={}, threadId={}, desc={}, whoKnows={}",
-                bookId, thread.getId(), description, op.getWhoKnows());
+        log.info("伏笔入账[PLANT]: bookId={}, threadId={}, desc={}, whoKnows={}, deadlineOffset={}",
+                bookId, thread.getId(), description, op.getWhoKnows(), op.getDeadlineIn());
     }
 
     private void resolveThread(Long bookId, Long chapterId, PlotOperation op) {

@@ -7,7 +7,6 @@ import com.linpj.novel.create.pojo.pipeline.AliveStatus;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
 /**
  * 人物动态状态服务（角色卡是静态设定，本表是随剧情推进的当前态）
  *
@@ -37,4 +36,14 @@ public interface CharacterStateService extends IService<NovelCharacterState> {
      * 容错语义：无状态记录 / 旧数据无字段 → 空集。
      */
     Map<Long, Set<String>> findHeldItemNames(Long bookId, List<Long> characterIds);
+
+    /** 位置事实（B1-1：RC-02 消费端——位置 + 状态快照所在章，移动事件校验的起点基准） */
+    record LocationFact(String location, Long chapterId) {
+    }
+
+    /**
+     * 批量读取角色当前位置与快照章（B1-1：位置为自由文本，规则侧自行归一化；
+     * 容错语义：无状态记录 / 位置字段缺失 → location 为 null 的 LocationFact）。
+     */
+    Map<Long, LocationFact> findLocations(Long bookId, List<Long> characterIds);
 }

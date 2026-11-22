@@ -77,16 +77,28 @@ public class ExtractionAgent {
     }
 
     /**
-     * 章节统一抽取：人物状态快照 + 关键事件（含结构化时间偏移与叙事模式）
+     * 章节统一抽取（兼容入口：无既有事件清单，不产生因果引用）
      *
      * @param chapterContent     章节正文（已剥离内联标记）
      * @param characterListText 角色清单文本（"角色ID: x, 角色名: y" 每行一个）
      */
     public ExtractionResult extractChapter(String chapterContent, String characterListText) {
+        return extractChapter(chapterContent, characterListText, null);
+    }
+
+    /**
+     * 章节统一抽取：人物状态快照 + 关键事件（含结构化时间偏移、叙事模式与因果引用）
+     *
+     * @param recentEventsText 既有事件清单文本（"事件ID: x, 章: y, 故事日: z, 描述" 每行一条；可空 = 无历史）
+     */
+    public ExtractionResult extractChapter(String chapterContent, String characterListText,
+                                            String recentEventsText) {
         String userPrompt = "请从以下章节正文中完成两项抽取：每位出场人物的最新动态状态快照，以及本章关键事件。\n\n"
                 + "【角色清单（characterId/participants 从中选择，未出场者不要输出）】\n"
                 + Objects.requireNonNullElse(characterListText, "（未知，若无法确定角色ID则跳过该角色）")
                 + "\n\n【章节正文】\n" + chapterContent
+                + (recentEventsText == null || recentEventsText.isBlank() ? ""
+                        : "\n\n【既有事件清单（含事件ID，因果引用只能从中选择）】\n" + recentEventsText)
                 + "\n\n" + converter.getFormat();
 
         ChatResponse response = Objects.requireNonNull(
@@ -130,6 +142,8 @@ public class ExtractionAgent {
                                    timeKind=ABSOLUTE_LABEL：架空历法原文（"青云历314年春"），timeLabel=原文照抄；
                                    无时间信息：timeKind 留空，days 不填——绝不猜天数。
                                 - participants：参与角色 ID 数组；location：地名。
+                                - causedByEventId：若本事件的直接起因是【既有事件清单】中的某事件，
+                                  填该事件的事件ID；新起因/清单中无对应事件则留空——禁止编造清单外的事件ID。
 
                                 只输出 JSON。
 

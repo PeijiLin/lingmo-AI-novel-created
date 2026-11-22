@@ -193,4 +193,95 @@ class EventTimelineServiceTest {
         assertNotNull(day);
         assertEquals(7, day);
     }
+
+    // ------------------------------------------------------------------
+    // 因果引用与因果链（B1-2：caused_by 校验入账 + 链式追溯）
+    // ------------------------------------------------------------------
+
+    private static NovelEventTimeline event(Long id, String desc, Long causedBy) {
+        NovelEventTimeline e = new NovelEventTimeline();
+        e.setId(id);
+        e.setBookId(1L);
+        e.setEventDesc(desc);
+        e.setCausedBy(causedBy);
+        return e;
+    }
+
+    @Test
+    void 因果引用有效则落库() {
+        NovelEventTimeline cause = event(3L, "密谈定计", null);
+        doReturn(null).when(service).lastAnchoredDayIndex(any(), any(), any());
+        doReturn(cause).when(service).getById(3L);
+        doReturn(true).when(service).save(any(NovelEventTimeline.class));
+
+        service.recordEvent(1L, 20L, 1, "NORMAL", null, null, 20L,
+                "王都论剑分出胜负", "王都", List.of(1L), 3L);
+
+        NovelEventTimeline captured = capturedEvent();
+        // 有效引用透传（RC-07 因果时序校验的图数据）
+        assertEquals(3L, captured.getCausedBy());
+    }
+
+    @Test
+    void 因果引用幻觉ID或跨书降级为无因果() {
+        doReturn(null).when(service).lastAnchoredDayIndex(any(), any(), any());
+        doReturn(true).when(service).save(any(NovelEventTimeline.class));
+        doReturn(null).when(service).getById(99L);
+        NovelEventTimeline otherBook = event(7L, "他书事件", null);
+        otherBook.setBookId(2L);
+        doReturn(otherBook).when(service).getById(7L);
+
+        service.recordEvent(1L, 20L, 1, "NORMAL", null, null, 20L, "事件甲", "王都", null, 99L);
+        service.recordEvent(1L, 20L, 2, "NORMAL", null, null, 20L, "事件乙", "王都", null, 7L);
+
+        ArgumentCaptor<NovelEventTimeline> captor = ArgumentCaptor.forClass(NovelEventTimeline.class);
+        verify(service, org.mockito.Mockito.times(2)).save(captor.capture());
+        assertNull(captor.getAllValues().get(0).getCausedBy(), "幻觉事件 ID 不入因果账");
+        assertNull(captor.getAllValues().get(1).getCausedBy(), "跨书引用降级为无因果");
+    }
+
+    @Test
+    void 无因果引用保持现状行为() {
+        doReturn(null).when(service).lastAnchoredDayIndex(any(), any(), any());
+
+        // 兼容入口（10 参）不带 causedBy：行为与 B1-2 之前完全一致
+        service.recordEvent(1L, 20L, 1, "NORMAL", null, null, 20L, "无因果事件", "王都", null);
+
+        assertNull(capturedEvent().getCausedBy());
+    }
+
+    @Test
+    void 因果链追溯到根因() {
+        NovelEventTimeline e1 = event(1L, "密谈定计", null);
+        NovelEventTimeline e2 = event(2L, "夜袭启程", 1L);
+        NovelEventTimeline e3 = event(3L, "王都论剑", 2L);
+        doReturn(List.of(e1, e2, e3)).when(service).timelineOf(1L);
+
+        List<NovelEventTimeline> chain = service.traceCausalChain(1L, 3L);
+
+        assertEquals(3, chain.size(), "三跳到根因");
+        assertEquals(3L, chain.get(0).getId(), "首元素为查询事件自身");
+        assertEquals(2L, chain.get(1).getId());
+        assertEquals(1L, chain.get(2).getId(), "末元素为根因");
+    }
+
+    @Test
+    void 因果链环状脏数据不致死循环() {
+        // 环防护：A→B→A（正常写入不可能出现，防御账本脏数据/人工改库）
+        NovelEventTimeline a = event(1L, "A", 2L);
+        NovelEventTimeline b = event(2L, "B", 1L);
+        doReturn(List.of(a, b)).when(service).timelineOf(1L);
+
+        List<NovelEventTimeline> chain = service.traceCausalChain(1L, 1L);
+
+        assertEquals(2, chain.size(), "visited 集合拦截环");
+    }
+
+    @Test
+    void 因果链无效参数返回空() {
+        assertTrue(service.traceCausalChain(null, 1L).isEmpty());
+        assertTrue(service.traceCausalChain(1L, null).isEmpty());
+        doReturn(List.of()).when(service).timelineOf(1L);
+        assertTrue(service.traceCausalChain(1L, 404L).isEmpty(), "事件不在这本书：空链");
+    }
 }

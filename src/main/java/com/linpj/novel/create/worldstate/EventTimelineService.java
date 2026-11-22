@@ -8,7 +8,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * 事件时间线服务（v2.0 设计 6.3 三时间轴之 T_story 账本）
@@ -32,8 +38,11 @@ public class EventTimelineService extends ServiceImpl<NovelEventTimelineMapper, 
     private static final String MODE_DREAM = "DREAM";
     private static final String MODE_STORY_IN_STORY = "STORY_IN_STORY";
 
+    /** 因果链追溯深度上限（防御环与超长链；正常链为 1-5 跳） */
+    private static final int MAX_CHAIN_DEPTH = 20;
+
     /**
-     * 事件入账：先归一化（offset + 参照锚点），再落库。
+     * 事件入账（兼容入口：无因果引用）。
      *
      * @param offset     LLM 结构化偏移（null = 无时间信息 → UNKNOWN）
      * @param rawTimeText 原文时间表述（审计保留）
@@ -42,6 +51,19 @@ public class EventTimelineService extends ServiceImpl<NovelEventTimelineMapper, 
                             TimeNormalization.Offset offset, String rawTimeText,
                             Long sourceChapter, String eventDesc, String location,
                             List<Long> participantIds) {
+        recordEvent(bookId, chapterId, sceneNo, narrativeMode, offset, rawTimeText,
+                sourceChapter, eventDesc, location, participantIds, null);
+    }
+
+    /**
+     * 事件入账：先归一化（offset + 参照锚点），再落库。
+     *
+     * @param causedBy   直接起因事件 ID（可空；仅接受同书已入账事件，无效引用降级为无因果）
+     */
+    public void recordEvent(Long bookId, Long chapterId, Integer sceneNo, String narrativeMode,
+                            TimeNormalization.Offset offset, String rawTimeText,
+                            Long sourceChapter, String eventDesc, String location,
+                            List<Long> participantIds, Long causedBy) {
         if (bookId == null || eventDesc == null || eventDesc.isBlank()) {
             return;
         }
@@ -72,6 +94,7 @@ public class EventTimelineService extends ServiceImpl<NovelEventTimelineMapper, 
         event.setLocation(location);
         event.setParticipants(participantIds);
         event.setSourceChapter(sourceChapter != null ? sourceChapter : chapterId);
+        event.setCausedBy(normalizeCause(bookId, causedBy));
         try {
             this.save(event);
         } catch (Exception e) {
@@ -133,6 +156,57 @@ public class EventTimelineService extends ServiceImpl<NovelEventTimelineMapper, 
     /** 场景是否锚定时间轴（DREAM/STORY_IN_STORY/UNRELIABLE 不锚定） */
     private static boolean isAnchorable(String mode) {
         return MODE_NORMAL.equals(mode) || MODE_FLASHBACK.equals(mode);
+    }
+
+    /**
+     * 因果引用校验（B1-2）：仅接受同书已入账事件（防 LLM 幻觉 ID）；无效引用降级为无因果。
+     * 已入账约束同时保证 cause_id < effect_id（自增序 = 入账序），因果图天然无环。
+     */
+    private Long normalizeCause(Long bookId, Long causedBy) {
+        if (causedBy == null) {
+            return null;
+        }
+        try {
+            NovelEventTimeline cause = this.getById(causedBy);
+            if (cause == null || !Objects.equals(cause.getBookId(), bookId)) {
+                log.warn("因果引用无效（事件不存在或跨书），降级为无因果: bookId={}, causedBy={}", bookId, causedBy);
+                return null;
+            }
+            return causedBy;
+        } catch (Exception e) {
+            log.warn("因果引用校验失败（降级为无因果）: causedBy={}, error={}", causedBy, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 因果链追溯（B1-2：某事件沿 caused_by 逆向回溯至根因；RC-07/分析侧消费）。
+     * 内存遍历：账本量级为百级事件，无需递归 CTE 下沉（量级驱动的取舍，同 ADR-8 图库决策逻辑）。
+     *
+     * @return 链节点序列（首元素为查询事件自身，末元素为根因；查询事件不在这本书返回空）
+     */
+    public List<NovelEventTimeline> traceCausalChain(Long bookId, Long eventId) {
+        if (bookId == null || eventId == null) {
+            return List.of();
+        }
+        Map<Long, NovelEventTimeline> byId = new LinkedHashMap<>();
+        for (NovelEventTimeline event : timelineOf(bookId)) {
+            if (event != null && event.getId() != null) {
+                byId.put(event.getId(), event);
+            }
+        }
+        List<NovelEventTimeline> chain = new ArrayList<>();
+        Set<Long> visited = new HashSet<>();
+        Long cursor = eventId;
+        while (cursor != null && chain.size() < MAX_CHAIN_DEPTH && visited.add(cursor)) {
+            NovelEventTimeline event = byId.get(cursor);
+            if (event == null) {
+                break;
+            }
+            chain.add(event);
+            cursor = event.getCausedBy();
+        }
+        return chain;
     }
 
     private static String normalizeMode(String mode) {

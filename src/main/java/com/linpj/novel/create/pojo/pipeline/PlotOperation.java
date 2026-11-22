@@ -34,4 +34,14 @@ public class PlotOperation implements Serializable {
 
     /** 秘密文本定位关键词（如"师父死因"）；PLANT 声明秘密时与 whoKnows 同时提供 */
     private String secretKey;
+
+    /**
+     * 计划回收章距（B1-3 伏笔排期："约 N 章后回收"，Planner 声明，可空）——落库 planned_offset。
+     */
+    private Integer plannedIn;
+
+    /**
+     * 截止回收章距（"须 N 章内回收"，超期触发 RC-09 逾期告警回灌 Planner，可空）——落库 deadline_offset。
+     */
+    private Integer deadlineIn;
 }

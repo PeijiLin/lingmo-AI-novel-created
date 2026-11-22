@@ -22,8 +22,17 @@ public interface PlotThreadService extends IService<NovelPlotThread> {
     /** 列出本书所有活跃（OPEN）伏笔 */
     List<NovelPlotThread> listActiveThreads(Long bookId);
 
-    /** 渲染活跃伏笔清单为 prompt 文本（不含 whoKnows/secretKey——秘密边界信息不进创作上下文，仅规则侧消费） */
+    /**
+     * 渲染活跃伏笔清单为 prompt 文本（创作侧口径：不含 whoKnows/secretKey，也不含回收排期——
+     * 排期属 meta 信息，伏笔回收时点不下发 Writer，防止提前兑付；v2.0 4.4 可见性矩阵）
+     */
     String renderActiveThreads(Long bookId);
+
+    /**
+     * 渲染活跃伏笔清单为 Planner/Critic 侧 prompt 文本（meta 口径：B1-3 伏笔排期 + 逾期提醒回灌）。
+     * currentChapterId 参与逾期判定；null/章号解析失败时仅渲染无逾期标注。
+     */
+    String renderPlannerThreads(Long bookId, Long currentChapterId);
 
     /**
      * 带知情边界的秘密线程（v2.0 M2-C5，RC-05 数据源）：OPEN + whoKnows 非空。

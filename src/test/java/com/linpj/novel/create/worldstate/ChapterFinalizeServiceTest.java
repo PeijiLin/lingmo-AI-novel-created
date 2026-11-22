@@ -103,7 +103,7 @@ class ChapterFinalizeServiceTest {
     private void stubExtraction(List<CharacterStateSnapshot> snapshots) {
         when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
         when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("摘要");
-        when(extractionAgent.extractChapter(any(), any())).thenReturn(extractionResult(snapshots));
+        when(extractionAgent.extractChapter(any(), any(), any())).thenReturn(extractionResult(snapshots));
         when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
     }
 
@@ -112,8 +112,8 @@ class ChapterFinalizeServiceTest {
         when(valueOperations.get(anyString())).thenReturn(null);
         when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
         when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("摘要");
-        when(extractionAgent.extractChapter(any(), any())).thenReturn(extractionResult(
-                List.of(snapshot(1L, 0.3), snapshot(2L, 0.9), snapshot(3L, null))));
+        when(extractionAgent.extractChapter(any(), any(), any())).thenReturn(
+                extractionResult(List.of(snapshot(1L, 0.3), snapshot(2L, 0.9), snapshot(3L, null))));
         when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
 
         service.finalizeChapter(1L, 10L, "第一章", "章节正文");
@@ -130,7 +130,7 @@ class ChapterFinalizeServiceTest {
         when(valueOperations.get(anyString())).thenReturn(null);
         when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
         when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("摘要");
-        when(extractionAgent.extractChapter(any(), any())).thenReturn(
+        when(extractionAgent.extractChapter(any(), any(), any())).thenReturn(
                 extractionResult(List.of(snapshot(1L, 0.7))));
         when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
 
@@ -283,27 +283,30 @@ class ChapterFinalizeServiceTest {
         relative.setNarrativeMode("NORMAL");
         relative.setTimeKind("DAY_OFFSET");
         relative.setDays(3);
+        relative.setCausedByEventId(3L);
         EventExtraction noTime = new EventExtraction();
         noTime.setEventDesc("顾昭拜会旧友");
         noTime.setTimeKind(null);
         ChapterExtraction extraction = new ChapterExtraction();
         extraction.setSnapshots(List.of());
         extraction.setEvents(java.util.Arrays.asList(relative, noTime));
-        when(extractionAgent.extractChapter(any(), any()))
+        when(extractionAgent.extractChapter(any(), any(), any()))
                 .thenReturn(new ExtractionAgent.ExtractionResult(extraction, 80L));
         when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
 
         service.finalizeChapter(1L, 10L, "第一章", "章节正文");
 
-        // DAY_OFFSET 映射为结构化偏移（时间运算在 TimeNormalization/时间线侧完成）
+        // DAY_OFFSET 映射为结构化偏移（时间运算在 TimeNormalization/时间线侧完成）；因果引用透传（B1-2）
         verify(eventTimelineService).recordEvent(eq(1L), eq(10L), org.mockito.ArgumentMatchers.isNull(),
                 eq("NORMAL"), eq(TimeNormalization.Offset.dayOffset(3)),
-                org.mockito.ArgumentMatchers.isNull(), eq(10L), eq("林砚抵达王都"), eq("王都"), eq(List.of(1L)));
+                org.mockito.ArgumentMatchers.isNull(), eq(10L), eq("林砚抵达王都"), eq("王都"), eq(List.of(1L)),
+                eq(3L));
         // 无时间信息：偏移 null（UNKNOWN 语义），事件仍入账供偏序校验
         verify(eventTimelineService).recordEvent(eq(1L), eq(10L), org.mockito.ArgumentMatchers.isNull(),
                 org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
                 org.mockito.ArgumentMatchers.isNull(), eq(10L), eq("顾昭拜会旧友"),
-                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull());
+                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.isNull());
     }
 
     @Test
@@ -311,7 +314,7 @@ class ChapterFinalizeServiceTest {
         when(valueOperations.get(anyString())).thenReturn(null);
         when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of("新伏笔"));
         when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("滚动摘要");
-        when(extractionAgent.extractChapter(any(), any()))
+        when(extractionAgent.extractChapter(any(), any(), any()))
                 .thenReturn(extractionResult(List.of(snapshot(1L), snapshot(2L))));
         when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
 
@@ -338,7 +341,7 @@ class ChapterFinalizeServiceTest {
 
         // 内容 hash 未变化：跳过全部结算
         verify(extractionAgent, never()).rollUpDigest(any(), any(), any());
-        verify(extractionAgent, never()).extractChapter(any(), any());
+        verify(extractionAgent, never()).extractChapter(any(), any(), any());
         verify(storyDigestService, never()).saveDigest(anyLong(), anyLong(), anyString());
         verify(characterStateService, never()).updateState(anyLong(), anyLong(), anyLong(), any());
     }
@@ -348,7 +351,7 @@ class ChapterFinalizeServiceTest {
         when(valueOperations.get(anyString())).thenThrow(new RuntimeException("Redis 不可用"));
         when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
         when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("滚动摘要");
-        when(extractionAgent.extractChapter(any(), any())).thenReturn(extractionResult(List.of()));
+        when(extractionAgent.extractChapter(any(), any(), any())).thenReturn(extractionResult(List.of()));
         when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
 
         assertDoesNotThrow(() -> service.finalizeChapter(1L, 10L, "第一章", "章节正文"));

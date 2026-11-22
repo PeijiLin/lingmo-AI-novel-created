@@ -56,6 +56,21 @@ public class CharacterRelationships implements Serializable {
      */
     private Date updatedAt;
 
+    /**
+     * 关系生效起始章号（chapterNum 域；B1-1：关系随剧情演化——旧行软失效不物理删除）
+     */
+    private Integer chapterFrom;
+
+    /**
+     * 关系失效章号（chapterNum 域，null = 当前有效；与 chapter_from 均空 = 长期有效，存量数据兼容）
+     */
+    private Integer chapterTo;
+
+    /**
+     * 关系强度/张力标记（0-9；供 RC-08 称谓校验与后续张力曲线分析，可空）
+     */
+    private Integer intensity;
+
     @TableField(exist = false)
     private static final long serialVersionUID = 1L;
 
@@ -78,7 +93,10 @@ public class CharacterRelationships implements Serializable {
             && (this.getRelationshipType() == null ? other.getRelationshipType() == null : this.getRelationshipType().equals(other.getRelationshipType()))
             && (this.getDescription() == null ? other.getDescription() == null : this.getDescription().equals(other.getDescription()))
             && (this.getCreatedAt() == null ? other.getCreatedAt() == null : this.getCreatedAt().equals(other.getCreatedAt()))
-            && (this.getUpdatedAt() == null ? other.getUpdatedAt() == null : this.getUpdatedAt().equals(other.getUpdatedAt()));
+            && (this.getUpdatedAt() == null ? other.getUpdatedAt() == null : this.getUpdatedAt().equals(other.getUpdatedAt()))
+            && (this.getChapterFrom() == null ? other.getChapterFrom() == null : this.getChapterFrom().equals(other.getChapterFrom()))
+            && (this.getChapterTo() == null ? other.getChapterTo() == null : this.getChapterTo().equals(other.getChapterTo()))
+            && (this.getIntensity() == null ? other.getIntensity() == null : this.getIntensity().equals(other.getIntensity()));
     }
 
     @Override
@@ -93,6 +111,9 @@ public class CharacterRelationships implements Serializable {
         result = prime * result + ((getDescription() == null) ? 0 : getDescription().hashCode());
         result = prime * result + ((getCreatedAt() == null) ? 0 : getCreatedAt().hashCode());
         result = prime * result + ((getUpdatedAt() == null) ? 0 : getUpdatedAt().hashCode());
+        result = prime * result + ((getChapterFrom() == null) ? 0 : getChapterFrom().hashCode());
+        result = prime * result + ((getChapterTo() == null) ? 0 : getChapterTo().hashCode());
+        result = prime * result + ((getIntensity() == null) ? 0 : getIntensity().hashCode());
         return result;
     }
 
@@ -110,6 +131,9 @@ public class CharacterRelationships implements Serializable {
         sb.append(", description=").append(description);
         sb.append(", createdAt=").append(createdAt);
         sb.append(", updatedAt=").append(updatedAt);
+        sb.append(", chapterFrom=").append(chapterFrom);
+        sb.append(", chapterTo=").append(chapterTo);
+        sb.append(", intensity=").append(intensity);
         sb.append(", serialVersionUID=").append(serialVersionUID);
         sb.append("]");
         return sb.toString();

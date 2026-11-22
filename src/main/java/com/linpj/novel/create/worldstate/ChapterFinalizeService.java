@@ -7,6 +7,7 @@ import com.linpj.novel.create.pojo.pipeline.AssertionType;
 import com.linpj.novel.create.pojo.pipeline.AliveStatus;
 import com.linpj.novel.create.pojo.pipeline.CharacterStateSnapshot;
 import com.linpj.novel.create.pojo.pipeline.EventExtraction;
+import com.linpj.novel.create.pojo.entity.NovelEventTimeline;
 import com.linpj.novel.create.utils.JsonUtil;
 import com.linpj.novel.create.pojo.vo.CharacterCardsVo;
 import com.linpj.novel.create.service.CharacterCardsService;
@@ -31,7 +32,7 @@ import java.util.Map;
  * 时机（设计 5.3）：章节内容定稿（用户确认保存章节）后执行：
  *   1. 内联伏笔标记补账（幂等）
  *   2. LLM 章节摘要 -> 与旧摘要合并滚动更新 story_digest
- *   3. LLM 抽取出场人物动态状态 -> 增量维护 character_state
+ *   3. LLM 抽取出场人物动态状态 + 本章关键事件（含对既有事件的因果引用）-> 增量维护账本
  *
  * 阶段3 同步实现（不阻塞用户保存主流程的异常兜底）；阶段4 挪入 novel.chapter.finalized
  * Kafka 消费者异步执行，本服务保持业务逻辑不变。
@@ -46,6 +47,9 @@ public class ChapterFinalizeService {
     private static final Logger log = LoggerFactory.getLogger(ChapterFinalizeService.class);
 
     private static final String FINALIZE_HASH_KEY = "novel:finalize:hash:";
+
+    /** 供抽取 Agent 因果引用的既有事件清单长度（B1-2：近期窗口覆盖绝大多数因果链） */
+    private static final int RECENT_EVENT_LIMIT = 15;
 
     private final ExtractionAgent extractionAgent;
     private final StoryDigestService storyDigestService;
@@ -117,9 +121,11 @@ public class ChapterFinalizeService {
                 storyDigestService.saveDigest(bookId, chapterId, digest.trim());
             }
 
-            // 2. 统一抽取（人物快照 + 事件时间线，同一次调用）-> 分级入账
+            // 2. 统一抽取（人物快照 + 事件时间线/因果引用，同一次调用）-> 分级入账。
+            //    本定稿抽取先于本事件入账执行，既有事件清单 = 全部历史事件（无自引用污染）
             ExtractionAgent.ExtractionResult result =
-                    extractionAgent.extractChapter(cleanContent, renderCharacterList(bookId));
+                    extractionAgent.extractChapter(cleanContent, renderCharacterList(bookId),
+                            renderRecentEvents(bookId));
             List<CharacterStateSnapshot> snapshots =
                     result.extraction() == null || result.extraction().getSnapshots() == null
                             ? List.of() : result.extraction().getSnapshots();
@@ -195,7 +201,8 @@ public class ChapterFinalizeService {
                         chapterId,
                         event.getEventDesc(),
                         event.getLocation(),
-                        event.getParticipants());
+                        event.getParticipants(),
+                        event.getCausedByEventId());
             } catch (Exception e) {
                 // 单事件失败不拖累整章结算（时间线是校验数据源，缺失时可退化偏序校验）
                 log.warn("事件入账失败（跳过该事件）: bookId={}, event={}", bookId, event.getEventDesc());
@@ -324,6 +331,26 @@ public class ChapterFinalizeService {
                     .reduce("", (a, b) -> a + b + "\n");
         } catch (Exception e) {
             log.warn("角色清单加载失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** 既有事件清单（B1-2：供抽取 Agent 因果引用；空账本返回 null 不占 prompt） */
+    private String renderRecentEvents(Long bookId) {
+        try {
+            List<NovelEventTimeline> timeline = eventTimelineService.timelineOf(bookId);
+            if (timeline == null || timeline.isEmpty()) {
+                return null;
+            }
+            int from = Math.max(0, timeline.size() - RECENT_EVENT_LIMIT);
+            return timeline.subList(from, timeline.size()).stream()
+                    .map(e -> "事件ID: " + e.getId()
+                            + ", 章: " + e.getChapterId()
+                            + ", 故事日: " + (e.getDayIndex() == null ? "未知" : e.getDayIndex())
+                            + ", " + e.getEventDesc())
+                    .reduce("", (a, b) -> a + b + "\n");
+        } catch (Exception e) {
+            log.warn("既有事件清单加载失败（按无历史处理）: {}", e.getMessage());
             return null;
         }
     }

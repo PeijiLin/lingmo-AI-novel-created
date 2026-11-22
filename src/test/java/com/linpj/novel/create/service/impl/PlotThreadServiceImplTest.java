@@ -2,8 +2,10 @@ package com.linpj.novel.create.service.impl;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.linpj.novel.create.pojo.entity.BookChapter;
 import com.linpj.novel.create.pojo.entity.NovelPlotThread;
 import com.linpj.novel.create.pojo.pipeline.PlotOperation;
+import com.linpj.novel.create.service.BookChapterService;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,6 +41,8 @@ class PlotThreadServiceImplTest {
     static void initEntityMetadata() {
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""),
                 NovelPlotThread.class);
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""),
+                BookChapter.class);
     }
 
     @BeforeEach
@@ -339,5 +343,134 @@ class PlotThreadServiceImplTest {
         assertNull(service.renderActiveThreads(1L));
         assertNull(service.renderActiveThreads(null));
         assertTrue(service.listActiveThreads(null).isEmpty());
+    }
+
+    // ------------------------------------------------------------------
+    // 伏笔排期（B1-3：plannedIn/deadlineIn 落库 + Planner 侧渲染 + 逾期回灌）
+    // ------------------------------------------------------------------
+
+    @Test
+    void plant操作落库回收排期() {
+        doReturn(0L).when(service).count(any());
+        doReturn(true).when(service).save(any(NovelPlotThread.class));
+
+        PlotOperation op = new PlotOperation();
+        op.setOp("PLANT");
+        op.setDescription("师妹身份之谜");
+        op.setPlannedIn(3);
+        op.setDeadlineIn(10);
+        service.applyPlotOperations(1L, 200L, List.of(op));
+
+        ArgumentCaptor<NovelPlotThread> captor = ArgumentCaptor.forClass(NovelPlotThread.class);
+        verify(service).save(captor.capture());
+        assertEquals(3, captor.getValue().getPlannedOffset());
+        assertEquals(10, captor.getValue().getDeadlineOffset());
+    }
+
+    @Test
+    void 创作侧渲染不含排期() {
+        NovelPlotThread thread = new NovelPlotThread();
+        thread.setId(7L);
+        thread.setDescription("断剑来历");
+        thread.setPlannedOffset(3);
+        thread.setDeadlineOffset(10);
+        doReturn(List.of(thread)).when(service).list(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+
+        String rendered = service.renderActiveThreads(1L);
+
+        assertTrue(rendered.contains("[伏笔#7] 断剑来历"));
+        assertTrue(!rendered.contains("章内回收"), "Writer 侧不下发 meta 排期（H4 隔离）");
+    }
+
+    private PlotThreadServiceImpl plannerService(BookChapterService bookChapterService) {
+        return spy(new PlotThreadServiceImpl(bookChapterService));
+    }
+
+    private BookChapter chapter(Long id, int chapterNum) {
+        BookChapter chapter = new BookChapter();
+        chapter.setId(id);
+        chapter.setBookId(1L);
+        chapter.setChapterNum(chapterNum);
+        return chapter;
+    }
+
+    @Test
+    void planner侧渲染带排期与逾期提醒() {
+        BookChapterService bookChapters = mock(BookChapterService.class);
+        PlotThreadServiceImpl planner = plannerService(bookChapters);
+        NovelPlotThread scheduled = new NovelPlotThread();
+        scheduled.setId(7L);
+        scheduled.setDescription("断剑来历");
+        scheduled.setPlannedOffset(3);
+        scheduled.setDeadlineOffset(5);
+        scheduled.setPlantedChapterId(200L);
+        doReturn(List.of(scheduled)).when(planner).list(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+        doReturn(List.of(chapter(200L, 8), chapter(500L, 14))).when(bookChapters)
+                .list(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+
+        String rendered = planner.renderPlannerThreads(1L, 500L);
+
+        assertTrue(rendered.contains("计划约 3 章后回收"));
+        assertTrue(rendered.contains("须 5 章内回收"));
+        assertTrue(rendered.contains("已逾期"), "已过 6 章 > 截止 5 章：逾期回灌提醒");
+    }
+
+    @Test
+    void planner侧渲染未逾期不带提醒() {
+        BookChapterService bookChapters = mock(BookChapterService.class);
+        PlotThreadServiceImpl planner = plannerService(bookChapters);
+        NovelPlotThread scheduled = new NovelPlotThread();
+        scheduled.setId(7L);
+        scheduled.setDescription("断剑来历");
+        scheduled.setDeadlineOffset(9);
+        scheduled.setPlantedChapterId(200L);
+        doReturn(List.of(scheduled)).when(planner).list(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+        doReturn(List.of(chapter(200L, 8), chapter(500L, 14))).when(bookChapters)
+                .list(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+
+        String rendered = planner.renderPlannerThreads(1L, 500L);
+
+        assertTrue(rendered.contains("须 9 章内回收"));
+        assertTrue(!rendered.contains("已逾期"), "已过 6 章 <= 截止 9 章：不提醒");
+    }
+
+    @Test
+    void planner侧渲染章号解析降级() {
+        // 无章号服务（兼容构造）或章节查询失败：只渲染排期数字，不做逾期判定
+        PlotThreadServiceImpl planner = spy(new PlotThreadServiceImpl());
+        NovelPlotThread scheduled = new NovelPlotThread();
+        scheduled.setId(7L);
+        scheduled.setDescription("断剑来历");
+        scheduled.setDeadlineOffset(5);
+        scheduled.setPlantedChapterId(200L);
+        doReturn(List.of(scheduled)).when(planner).list(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+
+        String rendered = planner.renderPlannerThreads(1L, 500L);
+
+        assertTrue(rendered.contains("须 5 章内回收"));
+        assertTrue(!rendered.contains("已逾期"), "章号不可得：宁可漏报提醒不误报");
+    }
+
+    @Test
+    void planner侧渲染无排期伏笔等于创作侧() {
+        PlotThreadServiceImpl planner = spy(new PlotThreadServiceImpl());
+        NovelPlotThread plain = new NovelPlotThread();
+        plain.setId(8L);
+        plain.setDescription("城主暗线");
+        doReturn(List.of(plain)).when(planner).list(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+
+        assertEquals("[伏笔#8] 城主暗线\n",
+                planner.renderPlannerThreads(1L, 500L),
+                "存量无排期伏笔：两侧渲染逐字节一致（现状回归）");
+    }
+
+    @Test
+    void planner侧渲染空账本返回空() {
+        BookChapterService bookChapters = mock(BookChapterService.class);
+        PlotThreadServiceImpl planner = plannerService(bookChapters);
+        doReturn(List.of()).when(planner).list(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+
+        assertNull(planner.renderPlannerThreads(1L, 500L));
+        assertNull(planner.renderPlannerThreads(null, null));
     }
 }

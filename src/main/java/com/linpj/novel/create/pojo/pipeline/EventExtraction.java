@@ -39,5 +39,11 @@ public class EventExtraction implements Serializable {
     /** 原文时间表述（ABSOLUTE_LABEL 必填；其余为审计原文可空） */
     private String timeLabel;
 
+    /**
+     * 直接起因事件 ID（B1-2 因果链）：仅允许从抽取提示中的【既有事件清单】选择，新起因留空。
+     * 消费端校验存在性（防幻觉 ID），无效引用降级为无因果。
+     */
+    private Long causedByEventId;
+
     private Double confidence;
 }

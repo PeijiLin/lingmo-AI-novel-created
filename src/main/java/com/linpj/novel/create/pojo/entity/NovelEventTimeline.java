@@ -64,5 +64,11 @@ public class NovelEventTimeline implements Serializable {
     /** FLASHBACK 场景的回忆目标章（T_narr 溯源；NORMAL 为自身章） */
     private Long sourceChapter;
 
+    /**
+     * 直接起因事件 ID（B1-2 因果链，RC-07 数据源）。
+     * 仅允许引用已入账事件（写入端校验存在性），故必有 cause_id &lt; effect_id，图天然无环。
+     */
+    private Long causedBy;
+
     private Date createdAt;
 }

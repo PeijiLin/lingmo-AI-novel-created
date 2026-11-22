@@ -143,6 +143,24 @@ public class CharacterStateServiceImpl extends ServiceImpl<NovelCharacterStateMa
         return result;
     }
 
+    @Override
+    public Map<Long, LocationFact> findLocations(Long bookId, List<Long> characterIds) {
+        Map<Long, LocationFact> result = new LinkedHashMap<>();
+        if (bookId == null || characterIds == null || characterIds.isEmpty()) {
+            return result;
+        }
+        List<NovelCharacterState> rows = this.list(new LambdaQueryWrapper<NovelCharacterState>()
+                .eq(NovelCharacterState::getBookId, bookId)
+                .in(NovelCharacterState::getCharacterId, characterIds));
+        rows.forEach(row -> {
+            Object raw = fieldOf(row.getState(), "location");
+            String location = raw == null ? null : String.valueOf(raw).trim();
+            result.put(row.getCharacterId(), new LocationFact(
+                    location == null || location.isEmpty() ? null : location, row.getChapterId()));
+        });
+        return result;
+    }
+
     /** 从 free-form state（Jackson 反序列化为 Map）取字段；非 Map 结构返回 null（旧数据兼容） */
     private static Object fieldOf(Object state, String field) {
         if (state instanceof Map<?, ?> map) {

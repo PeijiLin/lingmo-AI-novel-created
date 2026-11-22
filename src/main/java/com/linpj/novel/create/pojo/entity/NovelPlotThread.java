@@ -48,6 +48,18 @@ public class NovelPlotThread implements Serializable {
     /** 正文可检索短关键词（如"师父死因"）——RC-05 对成稿做知识边界文本定位用（null=不做文本定位） */
     private String secretKey;
 
+    /**
+     * 计划回收章距（B1-3 伏笔排期：距埋设章 N 章后回收，Planner 声明"约 N 章后收"）。
+     * 存相对章距而非绝对章号，避免与 book_chapter 章号域耦合；null = 未声明（现状行为）。
+     */
+    private Integer plannedOffset;
+
+    /**
+     * 截止回收章距（埋设章起 N 章内必须回收；超过触发 RC-09 逾期告警并回灌 Planner）。
+     * 排期属 meta 信息：Writer 侧上下文不下发（H4 可见性隔离），仅 Planner/Critic 渲染。
+     */
+    private Integer deadlineOffset;
+
     private Date createdAt;
 
     private Date updatedAt;

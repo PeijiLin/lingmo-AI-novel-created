@@ -204,3 +204,24 @@ CREATE TABLE IF NOT EXISTS novel_safety_log (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_safety_log_book ON novel_safety_log(book_id, layer);
+
+-- ---------------------------------------------------------------------------
+-- B1 批次（2026-11-22：PG 图语义等价实现——ADR-8 不引入图数据库，关系/因果/排期全落单栈）
+-- ---------------------------------------------------------------------------
+
+-- 人物关系生效区间（B1-1：关系边随剧情演化——旧行软失效不物理删除，语义对齐 novel_state_fact）
+-- 区间为 chapter_num 域（作者视角章号）；chapter_from/chapter_to 均空 = 长期有效（存量数据兼容）
+-- 消费端：RC-08 称谓/关系校验按当前章取生效边（covers 语义与 state_fact 一致）
+ALTER TABLE character_relationships ADD COLUMN IF NOT EXISTS chapter_from INTEGER;
+ALTER TABLE character_relationships ADD COLUMN IF NOT EXISTS chapter_to   INTEGER;
+ALTER TABLE character_relationships ADD COLUMN IF NOT EXISTS intensity    SMALLINT;
+
+-- 事件因果链（B1-2：caused_by 指向直接起因事件 ID，RC-07 因果时序校验的图数据）
+-- 写入端仅接受同书已入账事件（防幻觉 ID），故必有 cause_id < effect_id，因果图天然无环
+ALTER TABLE novel_event_timeline ADD COLUMN IF NOT EXISTS caused_by BIGINT;
+CREATE INDEX IF NOT EXISTS idx_event_causal ON novel_event_timeline(book_id, caused_by);
+
+-- 伏笔回收排期（B1-3：距埋设章的相对章距，避免与 book_chapter 章号域耦合）
+-- planned_offset/deadline_offset 超期触发 RC-09 逾期告警并回灌 Planner（meta 信息，Writer 侧不下发）
+ALTER TABLE novel_plot_threads ADD COLUMN IF NOT EXISTS planned_offset  INTEGER;
+ALTER TABLE novel_plot_threads ADD COLUMN IF NOT EXISTS deadline_offset INTEGER;
