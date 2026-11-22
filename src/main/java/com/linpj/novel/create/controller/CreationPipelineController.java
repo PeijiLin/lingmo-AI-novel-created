@@ -6,6 +6,7 @@ import com.linpj.novel.create.exception.BusinessException;
 import com.linpj.novel.create.exception.ErrorCode;
 import com.linpj.novel.create.exception.ThrowsUtils;
 import com.linpj.novel.create.pojo.dto.AiChatRequest;
+import com.linpj.novel.create.pojo.entity.CreationStageArtifact;
 import com.linpj.novel.create.pojo.entity.CreationTask;
 import com.linpj.novel.create.pojo.pipeline.PipelineRequest;
 import com.linpj.novel.create.pipeline.CreationPipelineService;
@@ -13,6 +14,9 @@ import com.linpj.novel.create.security.InputGuard;
 import com.linpj.novel.create.security.PrecheckVerdict;
 import com.linpj.novel.create.security.SafetyAuditService;
 import com.linpj.novel.create.service.CreationTaskService;
+import com.linpj.novel.create.worldstate.NodeCheckpointService;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.linpj.novel.create.mapper.novel.CreationStageArtifactMapper;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
@@ -41,15 +45,21 @@ public class CreationPipelineController {
     private final CreationTaskService creationTaskService;
     private final InputGuard inputGuard;
     private final SafetyAuditService safetyAuditService;
+    private final NodeCheckpointService checkpointService;
+    private final CreationStageArtifactMapper artifactMapper;
 
     public CreationPipelineController(CreationPipelineService creationPipelineService,
                                         CreationTaskService creationTaskService,
                                         InputGuard inputGuard,
-                                        SafetyAuditService safetyAuditService) {
+                                        SafetyAuditService safetyAuditService,
+                                        NodeCheckpointService checkpointService,
+                                        CreationStageArtifactMapper artifactMapper) {
         this.creationPipelineService = creationPipelineService;
         this.creationTaskService = creationTaskService;
         this.inputGuard = inputGuard;
         this.safetyAuditService = safetyAuditService;
+        this.checkpointService = checkpointService;
+        this.artifactMapper = artifactMapper;
     }
 
     /**
@@ -79,6 +89,42 @@ public class CreationPipelineController {
         CreationTask task = creationTaskService.getById(id);
         ThrowsUtils.throwIf(task == null, ErrorCode.NOT_FOUND_ERROR, "任务不存在");
         return ResultUtils.success(task);
+    }
+
+    /**
+     * run 级执行汇总（M5-F2：断点续跑观测入口）——任务 + 节点 checkpoint + 阶段产物清单一屏。
+     * 续跑前先看这里：哪些节点已成功（succeededNodes）、卡在哪个阶段（currentStage）、
+     * 产物落到了哪一轮（artifacts）。
+     */
+    @GetMapping("/pipeline/run/{runId}")
+    public BaseResponse<java.util.Map<String, Object>> queryRun(@PathVariable("runId") Long runId) {
+        ThrowsUtils.throwIf(runId == null || runId <= 0, ErrorCode.PARAMS_ERROR);
+        CreationTask task = creationTaskService.getById(runId);
+        ThrowsUtils.throwIf(task == null, ErrorCode.NOT_FOUND_ERROR, "任务不存在");
+
+        java.util.Map<String, Object> run = new java.util.LinkedHashMap<>();
+        run.put("task", task);
+        run.put("succeededNodes", checkpointService.succeededNodes(runId));
+        run.put("artifacts", listRunArtifacts(runId));
+        return ResultUtils.success(run);
+    }
+
+    /** run 内全部阶段产物清单（stage/round/tokens 概览——产物本体去 task 详情或 artifact 表按 ID 取） */
+    private java.util.List<java.util.Map<String, Object>> listRunArtifacts(Long runId) {
+        java.util.List<CreationStageArtifact> records = artifactMapper.selectList(
+                new LambdaQueryWrapper<CreationStageArtifact>()
+                        .eq(CreationStageArtifact::getTaskId, runId)
+                        .orderByAsc(CreationStageArtifact::getId));
+        java.util.List<java.util.Map<String, Object>> summary = new java.util.ArrayList<>();
+        for (CreationStageArtifact record : records) {
+            java.util.Map<String, Object> item = new java.util.LinkedHashMap<>();
+            item.put("stage", record.getStage());
+            item.put("round", record.getRound());
+            item.put("tokens", record.getTokens());
+            item.put("createdAt", record.getCreatedAt());
+            summary.add(item);
+        }
+        return summary;
     }
 
     /**

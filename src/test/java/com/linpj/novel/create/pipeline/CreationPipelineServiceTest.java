@@ -1371,4 +1371,39 @@ class CreationPipelineServiceTest {
         verify(plannerAgent, times(1)).plan(any());
         verify(creationTaskService).completeTask(eq(73L), eq(false), anyInt(), anyLong());
     }
+
+    @Test
+    void F2_首写断点恢复_不重写只评审() {
+        // PLANNING 与 WRITING:1 双恢复：Planner 与 Writer 零调用（零重复计费），Critic 对恢复稿首审
+        CreationPipelineService svc = serviceWithCheckpoint();
+        stubWriterContext();
+        stubCriticContext();
+        when(checkpointService.isResumable(any(), any(), any())).thenReturn(true);
+        when(outlineStoreService.loadLatest(1L, 10L)).thenReturn(outline());
+        when(artifactMapper.selectOne(any())).thenReturn(javaArtifactOf("恢复成稿"));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(polisherAgent.polish(any(), any(), any()))
+                .thenReturn(new PolisherAgent.PolishResult("润色稿", 60L));
+        when(criticAgent.verifyPolish(any(), anyString()))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 9), 30L));
+
+        svc.runAsync(74L, request(CreationMode.REFINED));
+
+        verify(plannerAgent, never()).plan(any());
+        verify(writerAgent, never()).write(any(), any());
+        verify(criticAgent, times(1)).review(any());
+        verify(creationTaskService).completeTask(eq(74L), eq(false), anyInt(), anyLong());
+    }
+
+    /** 构造 {"text":"..."} 形态的 artifact 行（Writer 成稿恢复的数据源） */
+    private static com.linpj.novel.create.pojo.entity.CreationStageArtifact javaArtifactOf(String text) {
+        com.linpj.novel.create.pojo.entity.CreationStageArtifact artifact =
+                new com.linpj.novel.create.pojo.entity.CreationStageArtifact();
+        artifact.setTaskId(74L);
+        artifact.setStage("WRITING");
+        artifact.setRound(1);
+        artifact.setArtifact(java.util.Map.of("text", text));
+        artifact.setTokens(100);
+        return artifact;
+    }
 }

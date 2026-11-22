@@ -1,5 +1,6 @@
 package com.linpj.novel.create.pipeline;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.linpj.novel.create.agent.CriticAgent;
 import com.linpj.novel.create.agent.PlannerAgent;
 import com.linpj.novel.create.agent.PolisherAgent;
@@ -802,13 +803,27 @@ public class CreationPipelineService {
         creationTaskService.advanceStage(taskId, StageCode.WRITING.name());
         WriterContext writerContext = contextAssemblyService.assembleWriterContext(request, outline);
         applyBudgetRagLimit(writerContext, budget); // L1+ 预警：RAG 召回减半
-        WriterAgent.WriteResult writeResult = writeWithRetry(writerContext, emitter, null, null);
+        // F2 第二批：首写断点恢复——同任务同输入的首写已成功且产物仍在 artifact → 恢复成稿不重写。
+        // 输入指纹与落账侧完全同构（outline/用户指令），hash 一致即输入未变；产物读回失败回退正常执行
+        String writerInputHash = sha256Of("outline=" + outline + "|direct=" + request.getUserInput());
+        String resumedDraft = null;
+        if (checkpointService != null && checkpointService.isResumable(taskId, NODE_WRITING_R1, writerInputHash)) {
+            resumedDraft = loadArtifactText(taskId, StageCode.WRITING, 1);
+            if (resumedDraft != null) {
+                log.info("断点续跑：恢复 WRITING:1 成稿（不重写，零重复计费）: taskId={}", taskId);
+                // SSE 语义：恢复稿不发增量 content（不是正在生成），仅落一次 REVISION 事件供前端重置缓冲
+                emitter.emitStage(StageEvent.revision(StageCode.WRITING, 1));
+                emitter.emitContent(resumedDraft);
+            }
+        }
+        WriterAgent.WriteResult writeResult = resumedDraft != null
+                ? new WriterAgent.WriteResult(resumedDraft, 0L) // 恢复稿零计费（token 已在首跑入账）
+                : writeWithRetry(writerContext, emitter, null, null);
         saveArtifact(taskId, StageCode.WRITING, 1, Map.of("text", writeResult.text()), writeResult.tokens());
         usage.addTokens(writeResult.tokens());
         usage.setStages(usage.getStages() + 1);
-        // F2：首写节点旁路落账（输入指纹=大纲；续跑恢复入口下一批接入，先积累复用凭证与计费审计）
-        markNodeSucceeded(taskId, NODE_WRITING_R1,
-                sha256Of("outline=" + outline + "|direct=" + request.getUserInput()), writeResult.tokens(), null);
+        // F2：首写节点旁路落账（输入指纹=大纲；恢复路径 markSucceeded 幂等跳过）
+        markNodeSucceeded(taskId, NODE_WRITING_R1, writerInputHash, writeResult.tokens(), resumedDraft != null ? "resumed" : null);
 
         // —— Critic 首审（N5 规则校验并入：阻塞级 HIGH 违规与 Critic 问题同构参与重写触发）——
         // 预算止损（L4）：连评审的钱也不花（超限 20% 后停笔——正文已在 artifact，转人工）；
@@ -1302,6 +1317,38 @@ public class CreationPipelineService {
         } catch (Exception e) {
             // 埋点落库失败不中断管道，仅记录日志
             log.error("阶段产物落库失败: taskId={}, stage={}", taskId, stage, e);
+        }
+    }
+
+    /**
+     * 读回最近一次阶段产物的文本字段（F2 第二批：Writer 成稿断点恢复）。
+     * 兼容两种 artifact 形态：{"text": "..."}（写作产物）与纯字符串。
+     * @return 无产物/结构不符/通道故障时返回 null（调用方回退正常执行——宁可重做）
+     */
+    private String loadArtifactText(Long taskId, StageCode stage, int round) {
+        try {
+            CreationStageArtifact record = artifactMapper.selectOne(
+                    new LambdaQueryWrapper<CreationStageArtifact>()
+                            .eq(CreationStageArtifact::getTaskId, taskId)
+                            .eq(CreationStageArtifact::getStage, stage.name())
+                            .eq(CreationStageArtifact::getRound, round)
+                            .orderByDesc(CreationStageArtifact::getId)
+                            .last("LIMIT 1"));
+            if (record == null || record.getArtifact() == null) {
+                return null;
+            }
+            Object artifact = record.getArtifact();
+            if (artifact instanceof java.util.Map<?, ?> map && map.get("text") != null) {
+                return String.valueOf(map.get("text"));
+            }
+            if (artifact instanceof String text && !text.isBlank()) {
+                return text;
+            }
+            return null;
+        } catch (Exception e) {
+            log.warn("阶段产物读回失败（按无产物处理，回退重写）: taskId={}, stage={}, error={}",
+                    taskId, stage, e.getMessage());
+            return null;
         }
     }
 
