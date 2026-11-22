@@ -32,19 +32,19 @@ public class InputGuard {
     /** 单章目标字数上限（单章超此值物理上不合理，属灌水/误填） */
     static final int MAX_TARGET_WORD_COUNT = 30_000;
 
-    /** 高置信注入模式（P1：拒绝） */
+    /** 高置信注入模式（P1：拒绝）——只收"数据/指令通道被污染"的操纵话术，题材词一律不收 */
     private static final Pattern[] INJECTION_PATTERNS = {
             // 指令覆盖话术
-            Pattern.compile("忽略(以上|上述|之前|前面)(所有|全部)?(的)?(规则|指令|提示|设定|约束)"),
+            Pattern.compile("忽略(以上|上述|之前|前面)(所有|全部)?(的)?(规则|指令|提示|约束)"),
             Pattern.compile("无视(以上|上述|之前|前面)(所有|全部)?(的)?(规则|指令|约束)"),
             Pattern.compile("(?i)ignore\\s+(all\\s+)?(previous|prior|above)\\s+(instructions?|rules?|prompts?)"),
             Pattern.compile("(?i)disregard\\s+(all\\s+)?(the\\s+)?(above|previous|prior)\\s+(instructions?|rules?)"),
-            // 系统提示词窃取（动词与密件名词之间允许少量连接词，容纳"你的系统提示词"等组合）
-            Pattern.compile("(输出|泄露|展示|打印|复述)[^。,，!！?？\\n]{0,6}(提示词?|系统提示词|指令集|系统指令|prompt)", Pattern.CASE_INSENSITIVE),
+            // 系统提示词窃取
+            Pattern.compile("(输出|泄露|展示|打印|复述)[^。,，!！?？\\n]{0,6}(提示词?|系统提示词|指令集|系统指令|prompt)"),
             Pattern.compile("(?i)(reveal|show|print|repeat)\\s+your\\s+(system\\s+)?prompt"),
             // 越狱模式
             Pattern.compile("(进入|开启|切换到)(开发者?模式|developer mode|DAN ?模式|越狱模式)"),
-            Pattern.compile("(?i)\\bDAN\\b.{0,12}(mode|模式)|(do anything now)"),
+            Pattern.compile("(?i)do anything now"),
     };
 
     /** 可疑弱模式（P2：标记放行——AI 角色文/系统流题材合法包含，只记不杀） */
