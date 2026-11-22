@@ -60,6 +60,7 @@ class ChapterFinalizeServiceTest {
     @Mock private StateHistoryService stateHistoryService;
     @Mock private PendingAssertionService pendingAssertionService;
     @Mock private EventTimelineService eventTimelineService;
+    @Mock private SummaryTreeService summaryTreeService;
 
     private ChapterFinalizeService service;
     private PipelineExtractionProperties extractionProperties;
@@ -72,7 +73,7 @@ class ChapterFinalizeServiceTest {
         service = new ChapterFinalizeService(extractionAgent, storyDigestService,
                 characterStateService, plotThreadService, characterCardsService, redisTemplate,
                 extractionProperties, pipelineFeatures, wikiConflictService, stateHistoryService,
-                pendingAssertionService, eventTimelineService);
+                pendingAssertionService, eventTimelineService, summaryTreeService);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
@@ -384,5 +385,105 @@ class ChapterFinalizeServiceTest {
     private static String sha256(String content) throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         return HexFormat.of().formatHex(digest.digest(content.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    // ------------------------------------------------------------------
+    // summaryTree 开关分流（M5-B4：开=三层树+派生写回；关=滚动合并现状行为）
+    // ------------------------------------------------------------------
+
+    private void stubTreeBasics(String chapterDigest) {
+        when(valueOperations.get(anyString())).thenReturn(null);
+        when(plotThreadService.extractInlinePlotMarks(anyString())).thenReturn(List.of());
+        // 透传桩：cleanContent 为主线语义（stripInlinePlotMarks 的标记剥离逻辑在 PlotThreadServiceImplTest 覆盖）
+        when(plotThreadService.stripInlinePlotMarks(anyString()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(extractionAgent.summarizeChapter(anyString(), anyString())).thenReturn(chapterDigest);
+        when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("滚动摘要不该被调用");
+        when(extractionAgent.extractChapter(any(), any(), any()))
+                .thenReturn(extractionResult(List.of()));
+        when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
+    }
+
+    @Test
+    void summaryTree开_章节详摘入账并派生滚动摘要() {
+        pipelineFeatures.setSummaryTree(true);
+        stubTreeBasics("第十章详摘");
+        when(summaryTreeService.recordChapterDigest(1L, 10L, "第十章详摘")).thenReturn(10);
+        when(summaryTreeService.loadChapterDigestsOfSegment(1L, 0)).thenReturn(List.of("第十章详摘"));
+        when(extractionAgent.compressDigests(any())).thenReturn("段零中摘");
+        // 章 10 非 10 的倍数余 0 边界？10%10==0 触发书重算——本用例覆盖段边界全链
+        when(summaryTreeService.nodeExists(1L, "BOOK", 0)).thenReturn(false);
+        when(summaryTreeService.loadSegmentDigests(1L)).thenReturn(List.of("段零中摘"));
+        when(summaryTreeService.renderTreeDigest(1L, 10L)).thenReturn("【全书概览】段零中摘……");
+
+        service.finalizeChapter(1L, 10L, "第十章", "章节正文");
+
+        // 树链路：章详摘 -> 段重算 -> （段边界）书重算 -> 派生写回
+        verify(extractionAgent).summarizeChapter("第十章", "章节正文");
+        verify(summaryTreeService).recordChapterDigest(1L, 10L, "第十章详摘");
+        verify(summaryTreeService).upsertNode(1L, "SEGMENT", 0, "段零中摘");
+        verify(summaryTreeService).upsertNode(1L, "BOOK", 0, "段零中摘");
+        verify(storyDigestService).saveDigest(1L, 10L, "【全书概览】段零中摘……");
+        // 滚动链路退役：rollUpDigest 零调用（等成本换结构——省下的钱换成了树节点）
+        verify(extractionAgent, never()).rollUpDigest(any(), any(), any());
+    }
+
+    @Test
+    void summaryTree开_非段边界不重算全书短摘() {
+        pipelineFeatures.setSummaryTree(true);
+        stubTreeBasics("第十一章详摘");
+        when(summaryTreeService.recordChapterDigest(1L, 10L, "第十一章详摘")).thenReturn(11);
+        when(summaryTreeService.loadChapterDigestsOfSegment(1L, 1)).thenReturn(List.of("第十一章详摘"));
+        when(extractionAgent.compressDigests(any())).thenReturn("段一中摘");
+        when(summaryTreeService.nodeExists(1L, "BOOK", 0)).thenReturn(true); // 已有书短摘
+        when(summaryTreeService.renderTreeDigest(1L, 10L)).thenReturn("派生摘要");
+
+        service.finalizeChapter(1L, 10L, "第十一章", "章节正文");
+
+        // 章 11 非边界且书短摘已存在：不触发书重算（每 10 章一次的成本约束）
+        verify(summaryTreeService, never()).loadSegmentDigests(1L);
+        verify(summaryTreeService, never()).upsertNode(any(), eq("BOOK"), any(), any());
+    }
+
+    @Test
+    void summaryTree开_章号不可定位回退滚动路径() {
+        pipelineFeatures.setSummaryTree(true);
+        stubTreeBasics("详摘");
+        when(summaryTreeService.recordChapterDigest(1L, 10L, "详摘")).thenReturn(null);
+        when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("滚动摘要");
+
+        service.finalizeChapter(1L, 10L, "第十章", "章节正文");
+
+        verify(extractionAgent).rollUpDigest(any(), any(), any());
+        verify(storyDigestService).saveDigest(1L, 10L, "滚动摘要");
+    }
+
+    @Test
+    void summaryTree开_树维护异常回退滚动路径() {
+        pipelineFeatures.setSummaryTree(true);
+        stubTreeBasics("详摘");
+        when(summaryTreeService.recordChapterDigest(1L, 10L, "详摘"))
+                .thenThrow(new RuntimeException("树库不可用"));
+        when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("滚动摘要");
+
+        service.finalizeChapter(1L, 10L, "第十章", "章节正文");
+
+        // 树是能力不是闸门：树路径故障回退滚动摘要，记忆能力优先
+        verify(extractionAgent).rollUpDigest(any(), any(), any());
+        verify(storyDigestService).saveDigest(1L, 10L, "滚动摘要");
+    }
+
+    @Test
+    void summaryTree关_零树交互现状行为不变() {
+        // 开关关（默认）：树服务零交互，滚动合并逐字节现状
+        stubTreeBasics("不该被用到");
+        when(extractionAgent.rollUpDigest(any(), any(), any())).thenReturn("滚动摘要");
+        when(storyDigestService.getDigest(1L)).thenReturn("旧摘要");
+
+        service.finalizeChapter(1L, 10L, "第十章", "章节正文");
+
+        org.mockito.Mockito.verifyNoInteractions(summaryTreeService);
+        verify(extractionAgent, never()).summarizeChapter(any(), any());
+        verify(extractionAgent).rollUpDigest("旧摘要", "第十章", "章节正文");
     }
 }

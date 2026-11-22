@@ -31,7 +31,8 @@ import java.util.Map;
  *
  * 时机（设计 5.3）：章节内容定稿（用户确认保存章节）后执行：
  *   1. 内联伏笔标记补账（幂等）
- *   2. LLM 章节摘要 -> 与旧摘要合并滚动更新 story_digest
+ *   2. 摘要维护：summaryTree 开启时维护三层定长摘要树并派生滚动摘要；
+ *      关闭时（默认）LLM 滚动合并更新 story_digest（现状行为）
  *   3. LLM 抽取出场人物动态状态 + 本章关键事件（含对既有事件的因果引用）-> 增量维护账本
  *
  * 阶段3 同步实现（不阻塞用户保存主流程的异常兜底）；阶段4 挪入 novel.chapter.finalized
@@ -63,6 +64,7 @@ public class ChapterFinalizeService {
     private final StateHistoryService stateHistoryService;
     private final PendingAssertionService pendingAssertionService;
     private final EventTimelineService eventTimelineService;
+    private final SummaryTreeService summaryTreeService;
 
     public ChapterFinalizeService(ExtractionAgent extractionAgent,
                                    StoryDigestService storyDigestService,
@@ -76,6 +78,26 @@ public class ChapterFinalizeService {
                                    StateHistoryService stateHistoryService,
                                    PendingAssertionService pendingAssertionService,
                                    EventTimelineService eventTimelineService) {
+        this(extractionAgent, storyDigestService, characterStateService, plotThreadService,
+                characterCardsService, redisTemplate, extractionProperties, pipelineFeatures,
+                wikiConflictService, stateHistoryService, pendingAssertionService, eventTimelineService, null);
+    }
+
+    /** 生产装配（Spring 唯一注入点）：含摘要树服务（M5-B4） */
+    @org.springframework.beans.factory.annotation.Autowired
+    public ChapterFinalizeService(ExtractionAgent extractionAgent,
+                                   StoryDigestService storyDigestService,
+                                   CharacterStateService characterStateService,
+                                   PlotThreadService plotThreadService,
+                                   CharacterCardsService characterCardsService,
+                                   RedisTemplate<String, Object> redisTemplate,
+                                   PipelineExtractionProperties extractionProperties,
+                                   PipelineFeatures pipelineFeatures,
+                                   WikiConflictService wikiConflictService,
+                                   StateHistoryService stateHistoryService,
+                                   PendingAssertionService pendingAssertionService,
+                                   EventTimelineService eventTimelineService,
+                                   SummaryTreeService summaryTreeService) {
         this.extractionAgent = extractionAgent;
         this.storyDigestService = storyDigestService;
         this.characterStateService = characterStateService;
@@ -88,6 +110,7 @@ public class ChapterFinalizeService {
         this.stateHistoryService = stateHistoryService;
         this.pendingAssertionService = pendingAssertionService;
         this.eventTimelineService = eventTimelineService;
+        this.summaryTreeService = summaryTreeService;
     }
 
     /**
@@ -114,11 +137,15 @@ public class ChapterFinalizeService {
             }
             String cleanContent = plotThreadService.stripInlinePlotMarks(content);
 
-            // 1. 摘要滚动更新 story_digest
-            String existingDigest = storyDigestService.getDigest(bookId);
-            String digest = extractionAgent.rollUpDigest(existingDigest, title, cleanContent);
-            if (digest != null && !digest.isBlank()) {
-                storyDigestService.saveDigest(bookId, chapterId, digest.trim());
+            // 1. 摘要维护（M5-B4：summaryTree 开关分流——关=滚动合并现状行为，开=三层树+派生写回）
+            if (pipelineFeatures.isSummaryTree() && summaryTreeService != null) {
+                maintainSummaryTree(bookId, chapterId, title, cleanContent);
+            } else {
+                String existingDigest = storyDigestService.getDigest(bookId);
+                String digest = extractionAgent.rollUpDigest(existingDigest, title, cleanContent);
+                if (digest != null && !digest.isBlank()) {
+                    storyDigestService.saveDigest(bookId, chapterId, digest.trim());
+                }
             }
 
             // 2. 统一抽取（人物快照 + 事件时间线/因果引用，同一次调用）-> 分级入账。
@@ -162,16 +189,90 @@ public class ChapterFinalizeService {
 
             markProcessed(chapterId, content);
             log.info("章节定稿结算完成: bookId={}, chapterId={}, 摘要={}字, 人物状态={}个",
-                    bookId, chapterId, digest == null ? 0 : digest.length(), snapshots.size());
+                    bookId, chapterId,
+                    storyDigestService.getDigest(bookId) == null ? 0 : storyDigestService.getDigest(bookId).length(),
+                    snapshots.size());
         } catch (Exception e) {
             log.error("章节定稿结算失败（不影响章节保存）: bookId={}, chapterId={}", bookId, chapterId, e);
         }
     }
 
     // ------------------------------------------------------------------
-    // 断言可信度门禁（v2.0 设计 2.3 / M2-C6）与事件入账（C2 承接）
+    // 摘要树维护（M5-B4：summaryTree 开启时的三层定长树 + 滚动摘要派生写回）
     // ------------------------------------------------------------------
 
+    /**
+     * 三层摘要树维护（每章一次调用，与滚动路径等成本——rollUp 的钱换成 summarize）：
+     * 1. CHAPTER 详摘入账（LLM，≤500 字，账本侧硬截断）
+     * 2. SEGMENT 当前段重算（LLM 从段内章详摘压缩，≤600 字——每章重算保证"前情脉络"近因性）
+     * 3. BOOK 段边界重算（章号 %10==0 或首次缺失时，LLM 从段中摘压缩，≤300 字）
+     * 4. 滚动摘要派生写回（渲染树 -> story_digest，代码拼接零 LLM）：
+     *    消费端（装配器/getDigest）零改动，开关随时回退且两套账本不漂移
+     * 维护路径本身即"从子摘要全量重算上级"，重入幂等（H2 消融复现依赖）。
+     * 任何失败回退 rollUpDigest 滚动路径——记忆能力优先于机制纯度。
+     */
+    private void maintainSummaryTree(Long bookId, Long chapterId, String title, String cleanContent) {
+        try {
+            String chapterDigest = extractionAgent.summarizeChapter(title, cleanContent);
+            Integer chapterNum = summaryTreeService.recordChapterDigest(bookId, chapterId, chapterDigest);
+            if (chapterNum == null) {
+                // 章号不可定位：树无法落位，静默回退滚动（此处不报错——树是能力不是闸门）
+                rollUpAndSave(bookId, chapterId, title, cleanContent);
+                return;
+            }
+            // 当前段重算（段内已有详摘全部作为输入；空段防御）
+            int segmentIndex = SummaryTreeService.segmentOf(chapterNum);
+            List<String> segmentSources =
+                    summaryTreeService.loadChapterDigestsOfSegment(bookId, segmentIndex);
+            if (!segmentSources.isEmpty()) {
+                String segmentDigest = extractionAgent.compressDigests(segmentSources);
+                if (segmentDigest != null && !segmentDigest.isBlank()) {
+                    summaryTreeService.upsertNode(bookId, SummaryTreeService.LEVEL_SEGMENT,
+                            segmentIndex, segmentDigest);
+                }
+            }
+            // 全书短摘：段边界（每 10 章）或首次缺失时重算
+            if (chapterNum % SummaryTreeService.SEGMENT_SIZE == 0
+                    || !summaryTreeService.nodeExists(bookId, SummaryTreeService.LEVEL_BOOK, 0)) {
+                List<String> bookSources = summaryTreeService.loadSegmentDigests(bookId);
+                if (!bookSources.isEmpty()) {
+                    String bookDigest = extractionAgent.compressDigests(bookSources);
+                    if (bookDigest != null && !bookDigest.isBlank()) {
+                        summaryTreeService.upsertNode(bookId, SummaryTreeService.LEVEL_BOOK,
+                                0, bookDigest);
+                    }
+                }
+            }
+            // 派生滚动摘要写回（树渲染；无节点时兜底章详摘）
+            String derived = summaryTreeService.renderTreeDigest(bookId, chapterId);
+            String fallback = derived != null ? derived : chapterDigest;
+            if (fallback != null && !fallback.isBlank()) {
+                storyDigestService.saveDigest(bookId, chapterId, fallback.trim());
+            }
+        } catch (Exception e) {
+            log.warn("摘要树维护失败（回退滚动摘要路径）: bookId={}, chapterId={}, error={}",
+                    bookId, chapterId, e.getMessage());
+            rollUpAndSave(bookId, chapterId, title, cleanContent);
+        }
+    }
+
+    /** 滚动摘要路径（现状行为；树维护失败/章号不可定位时的回退） */
+    private void rollUpAndSave(Long bookId, Long chapterId, String title, String cleanContent) {
+        try {
+            String existingDigest = storyDigestService.getDigest(bookId);
+            String digest = extractionAgent.rollUpDigest(existingDigest, title, cleanContent);
+            if (digest != null && !digest.isBlank()) {
+                storyDigestService.saveDigest(bookId, chapterId, digest.trim());
+            }
+        } catch (Exception e) {
+            log.warn("滚动摘要回退也失败（本篇记忆停更一章）: bookId={}, chapterId={}, error={}",
+                    bookId, chapterId, e.getMessage());
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 断言可信度门禁（v2.0 设计 2.3 / M2-C6）与事件入账（C2 承接）
+    // ------------------------------------------------------------------
     /**
      * 非 FACT 判定（credibility 部署开关门控）：关闭时全部按 FACT 走现状路径。
      * null/非法标签归 FACT——快照主体字段的错误入账风险低于整章账本跳过，

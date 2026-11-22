@@ -248,3 +248,26 @@ CREATE TABLE IF NOT EXISTS novel_node_checkpoint (
     CONSTRAINT uk_node_checkpoint UNIQUE (run_id, node_id)
 );
 CREATE INDEX IF NOT EXISTS idx_node_checkpoint_run ON novel_node_checkpoint(run_id);
+
+-- ---------------------------------------------------------------------------
+-- B4 批次（2026-11-22：summaryTree 定长摘要树——H2 记忆分层假设的数据机制本体）
+-- ---------------------------------------------------------------------------
+
+-- 三层定长摘要树：CHAPTER（章节详摘 <=500 字）/ SEGMENT（区段中摘，每 10 章一个节点 <=600 字）/ BOOK（全书短摘 <=300 字）
+-- - 上层由下层重算（代码截断强制定长不变式：摘要总量恒定，不随章数线性膨胀）
+-- - seq：CHAPTER=chapter_num，SEGMENT=区段序号(0 起)，BOOK=0
+-- - is_stale：写入下层时置上层 stale，重算时清除（血缘标记；渲染始终取最新内容保证近因性）
+-- - 幂等重建：维护路径本身即"从子摘要全量重算上级"，写路径重入结果一致（H2 消融复现依赖）
+CREATE TABLE IF NOT EXISTS novel_summary_tree (
+    id         BIGSERIAL PRIMARY KEY,
+    book_id    BIGINT NOT NULL,
+    level      VARCHAR(10) NOT NULL,
+    seq        INTEGER NOT NULL,
+    chapter_id BIGINT,
+    content    TEXT,
+    is_stale   BOOLEAN NOT NULL DEFAULT FALSE,
+    version    INTEGER NOT NULL DEFAULT 1,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_summary_tree UNIQUE (book_id, level, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_summary_tree_level ON novel_summary_tree(book_id, level);

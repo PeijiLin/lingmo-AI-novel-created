@@ -77,6 +77,61 @@ public class ExtractionAgent {
     }
 
     /**
+     * 章节详摘（M5-B4 summaryTree：CHAPTER 层节点生成——自包含单章摘要，不合并历史）。
+     * 上层（区段/全书）由代码用下层摘要重算（{@link #compressDigests}），定长截断由账本侧强制。
+     */
+    public String summarizeChapter(String chapterTitle, String chapterContent) {
+        String prompt = """
+                你是小说编辑部助理。请为本章节单独撰写一份章节详摘。
+
+                【要求】
+                1. 覆盖本章主要事件与因果、出场人物的状态变化、本章埋设或推进的伏笔。
+                2. 第三人称客观转述，只写本章已发生的内容，不做任何后续推断或剧透。
+                3. 长度控制在 500 字以内，超出部分压缩细节保留骨架。
+                4. 只输出摘要正文，不要任何解释、标题或前缀。
+
+                【章节】""" + (chapterTitle == null ? "" : "《" + chapterTitle + "》") + "\n"
+                + chapterContent;
+        return Objects.requireNonNullElse(
+                chatClient.prompt()
+                        .system("你是小说编辑部助理，负责撰写精准、克制的章节摘要。")
+                        .user(prompt)
+                        .call()
+                        .content(),
+                "");
+    }
+
+    /**
+     * 上层摘要压缩（M5-B4 summaryTree：SEGMENT/BOOK 层节点生成——从下层摘要列表重算上级）。
+     * 公理 3 派生链：原文 -> 章节详摘 -> 区段中摘 -> 全书短摘，逐层只看下层不看原文。
+     *
+     * @param digests 下层摘要列表（区段压缩=章详摘；全书压缩=段中摘）
+     */
+    public String compressDigests(List<String> digests) {
+        StringBuilder sources = new StringBuilder();
+        for (int i = 0; i < digests.size(); i++) {
+            sources.append("\n[").append(i + 1).append("] ").append(digests.get(i));
+        }
+        String prompt = """
+                你是小说编辑部助理。请把下列若干条摘要压缩为一份上级摘要。
+
+                【要求】
+                1. 只保留主干因果、关键转折与仍未收束的伏笔状态，删去一切细节描写。
+                2. 按时间顺序组织，不引入下层未出现的信息，不做推断。
+                3. 长度控制在 600 字以内。
+                4. 只输出摘要正文，不要任何解释、标题或前缀。
+
+                【待压缩摘要】""" + sources;
+        return Objects.requireNonNullElse(
+                chatClient.prompt()
+                        .system("你是小说编辑部助理，负责维护层级化前情摘要。")
+                        .user(prompt)
+                        .call()
+                        .content(),
+                "");
+    }
+
+    /**
      * 章节统一抽取（兼容入口：无既有事件清单，不产生因果引用）
      *
      * @param chapterContent     章节正文（已剥离内联标记）
