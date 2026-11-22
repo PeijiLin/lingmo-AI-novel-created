@@ -271,3 +271,30 @@ CREATE TABLE IF NOT EXISTS novel_summary_tree (
     CONSTRAINT uk_summary_tree UNIQUE (book_id, level, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_summary_tree_level ON novel_summary_tree(book_id, level);
+
+-- ---------------------------------------------------------------------------
+-- B5 批次（2026-11-22：F4 成本账本——token/成本核算与导出，论文 §10.7/§11.1 成本论证数据源）
+-- ---------------------------------------------------------------------------
+
+-- 节点级成本账本行（每个 run 每个节点一行，轮次折叠求和；UNIQUE(run_id, node) 幂等重算）
+-- - 溯源：行由 creation_stage_artifact 派生（stage -> Agent -> model 映射确定），任务终态时单点入账
+-- - mode：任务模式（FAST/STANDARD/REFINED/PRECISE），模式档位相对成本（论文 11.1）的分组维度
+-- - input_tokens/output_tokens：网关 usage 元数据回传时细化（当前记 total，拆分列预留）
+-- - cost：total_tokens/1000 x 价目(novel.pipeline.pricing.per-1k.{model})，未配价目 = 0（导出标注）
+-- - 失败任务同样入账（已烧掉的 token 不因任务失败而消失）
+CREATE TABLE IF NOT EXISTS novel_cost_ledger (
+    id            BIGSERIAL PRIMARY KEY,
+    run_id        BIGINT NOT NULL,
+    book_id       BIGINT NOT NULL,
+    chapter_id    BIGINT,
+    mode          VARCHAR(20),
+    node          VARCHAR(20) NOT NULL,
+    model         VARCHAR(100),
+    total_tokens  BIGINT NOT NULL DEFAULT 0,
+    input_tokens  BIGINT,
+    output_tokens BIGINT,
+    cost          NUMERIC(12,6) NOT NULL DEFAULT 0,
+    created_at    TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_cost_ledger UNIQUE (run_id, node)
+);
+CREATE INDEX IF NOT EXISTS idx_cost_ledger_book ON novel_cost_ledger(book_id);

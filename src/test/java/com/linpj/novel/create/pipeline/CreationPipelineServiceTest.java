@@ -1406,4 +1406,67 @@ class CreationPipelineServiceTest {
         artifact.setTokens(100);
         return artifact;
     }
+
+    // ------------------------------------------------------------------
+    // M5-F4：成本账本终态入账钩子（成功/失败均入账——烧掉的 token 不消失）
+    // ------------------------------------------------------------------
+
+    @Mock private com.linpj.novel.create.worldstate.CostLedgerService costLedgerService;
+
+    /** 带成本账本的装配（18 参生产构造；预算数值可调） */
+    private CreationPipelineService serviceWithLedger(long chapterMaxTokens, long bookMaxTokens) {
+        com.linpj.novel.create.config.PipelineBudgetProperties budget =
+                new com.linpj.novel.create.config.PipelineBudgetProperties();
+        budget.getChapter().setMaxTokens(chapterMaxTokens);
+        budget.getChapter().setMaxElapsedMs(0);
+        budget.getBook().setMaxTokens(bookMaxTokens);
+        return new CreationPipelineService(writerAgent, criticAgent, plannerAgent, polisherAgent,
+                creationTaskService, artifactMapper, contextAssemblyService, plotThreadService,
+                outlineStoreService, creationEventProducer, pipelineFeatures, ruleChecker,
+                ruleExemptionService, null, null, budget, null, costLedgerService);
+    }
+
+    @Test
+    void F4_任务成功后成本入账() {
+        CreationPipelineService svc = serviceWithLedger(1_000_000, 1_000_000);
+        stubWriterContext();
+        stubCriticContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+
+        svc.runAsync(81L, request(CreationMode.STANDARD));
+
+        verify(creationTaskService).completeTask(eq(81L), eq(false), anyInt(), anyLong());
+        verify(costLedgerService).ledgerRun(eq(81L), eq("STANDARD"), eq(1L), eq(10L));
+    }
+
+    @Test
+    void F4_失败任务同样成本入账() {
+        // L4 预算止损：Critic 首审前停笔 -> failTask；WRITING 阶段产物已落 -> 已烧 token 必须入账
+        CreationPipelineService svc = serviceWithLedger(50, 1_000_000);
+        stubWriterContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("正文", 100L));
+
+        svc.runAsync(82L, request(CreationMode.STANDARD));
+
+        verify(creationTaskService).failTask(eq(82L), org.mockito.ArgumentMatchers.contains("L4"));
+        verify(costLedgerService).ledgerRun(eq(82L), eq("STANDARD"), eq(1L), eq(10L));
+    }
+
+    @Test
+    void F4_账本服务缺位时管道不受影响() {
+        // 18 参构造 costLedger=null：兼容装配零账本（离线/单测），终态照常上报
+        com.linpj.novel.create.config.PipelineBudgetProperties budget =
+                new com.linpj.novel.create.config.PipelineBudgetProperties();
+        CreationPipelineService svc = new CreationPipelineService(writerAgent, criticAgent,
+                plannerAgent, polisherAgent, creationTaskService, artifactMapper,
+                contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
+                pipelineFeatures, ruleChecker, ruleExemptionService, null, null, budget, null, null);
+        stubWriterContext();
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                () -> svc.runAsync(83L, request(CreationMode.FAST)));
+        verify(creationTaskService).completeTask(eq(83L), eq(false), anyInt(), anyLong());
+    }
 }

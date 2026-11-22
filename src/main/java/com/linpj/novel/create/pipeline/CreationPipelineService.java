@@ -138,6 +138,8 @@ public class CreationPipelineService {
     private final PipelineBudgetProperties budgetProperties;
     /** 节点 checkpoint（M5-F2 断点续跑：可空——旁路能力，离线装配/单测无数据库环境时缺位） */
     private final com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService;
+    /** 成本账本（M5-F4：可空——观测能力，任务终态单点入账） */
+    private final com.linpj.novel.create.worldstate.CostLedgerService costLedgerService;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -223,7 +225,33 @@ public class CreationPipelineService {
     }
 
     /**
-     * 生产装配（Spring 唯一注入点）：安全 gate + 流式拦截 + 预算守卫 + 节点 checkpoint。
+     * 兼容构造（测试/离线装配，含 checkpoint 无账本）：预算兑底、checkpoint/账本旁路可空。
+     */
+    CreationPipelineService(WriterAgent writerAgent,
+                            CriticAgent criticAgent,
+                            PlannerAgent plannerAgent,
+                            PolisherAgent polisherAgent,
+                            CreationTaskService creationTaskService,
+                            CreationStageArtifactMapper artifactMapper,
+                            ContextAssemblyService contextAssemblyService,
+                            PlotThreadService plotThreadService,
+                            ChapterOutlineStoreService outlineStoreService,
+                            CreationEventProducer creationEventProducer,
+                            PipelineFeatures pipelineFeatures,
+                            RuleChecker ruleChecker,
+                            RuleExemptionService ruleExemptionService,
+                            FinalDraftGate finalDraftGate,
+                            StreamSafetyGate streamSafetyGate,
+                            PipelineBudgetProperties budgetProperties,
+                            com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService) {
+        this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
+                contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
+                pipelineFeatures, ruleChecker, ruleExemptionService, finalDraftGate, streamSafetyGate,
+                budgetProperties, checkpointService, null);
+    }
+
+    /**
+     * 生产装配（Spring 唯一注入点）：安全 gate + 流式拦截 + 预算守卫 + checkpoint + 成本账本。
      */
     @Autowired
     public CreationPipelineService(WriterAgent writerAgent,
@@ -242,7 +270,8 @@ public class CreationPipelineService {
                                      FinalDraftGate finalDraftGate,
                                      StreamSafetyGate streamSafetyGate,
                                      PipelineBudgetProperties budgetProperties,
-                                     com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService) {
+                                     com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService,
+                                     com.linpj.novel.create.worldstate.CostLedgerService costLedgerService) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -260,6 +289,7 @@ public class CreationPipelineService {
         this.streamSafetyGate = streamSafetyGate;
         this.budgetProperties = budgetProperties;
         this.checkpointService = checkpointService;
+        this.costLedgerService = costLedgerService;
     }
 
     // ------------------------------------------------------------------
@@ -348,6 +378,16 @@ public class CreationPipelineService {
             emitter.emitStage(StageEvent.completed(degraded, usage));
             creationTaskService.completeTask(taskId, degraded,
                     Math.toIntExact(Math.min(Integer.MAX_VALUE, usage.getTotalTokens())), usage.getElapsedMs());
+        }
+        // M5-F4 成本入账（成功/失败均入账——已烧掉的 token 不因任务失败消失）：
+        // 从阶段产物派生（stage→Agent→model 映射确定），幂等可重算，服务缺位/故障静默
+        if (costLedgerService != null) {
+            try {
+                costLedgerService.ledgerRun(taskId, request.getMode().name(),
+                        request.getBookId(), request.getChapterId());
+            } catch (Exception e) {
+                log.debug("成本入账异常（忽略，服务层已静默兜底）: taskId={}, {}", taskId, e.getMessage());
+            }
         }
         emitter.complete();
     }
