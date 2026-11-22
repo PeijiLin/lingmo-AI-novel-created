@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -40,9 +41,19 @@ public class ModelCallLog {
     // serializeNulls：每行字段集稳定（失败调用也有 response:null/error:...），
     // 回放与探针消费端按固定 schema 解析，无需逐行判空键
     private final Gson gson = new GsonBuilder().serializeNulls().create();
+    /** 归档器（B0-4：可空——离线装配/单测无 MinIO 环境时零副作用） */
+    private final RecordingArchiver archiver;
 
+    /** 兼容构造（无归档：单测/离线装配用） */
     public ModelCallLog(PipelineRecordingProperties properties) {
+        this(properties, null);
+    }
+
+    /** 生产装配（Spring 唯一注入点）：落盘后异步归档 MinIO */
+    @Autowired
+    public ModelCallLog(PipelineRecordingProperties properties, RecordingArchiver archiver) {
         this.properties = properties;
+        this.archiver = archiver;
     }
 
     public boolean enabled() {
@@ -65,11 +76,18 @@ public class ModelCallLog {
         }
         try {
             String line = gson.toJson(entry(agent, request, response, elapsedMs, error));
+            Path file;
             synchronized (fileLock) {
                 Path dir = Paths.get(properties.getDir());
                 Files.createDirectories(dir);
-                Files.writeString(dir.resolve(FILE_NAME), line + System.lineSeparator(),
+                file = dir.resolve(FILE_NAME);
+                Files.writeString(file, line + System.lineSeparator(),
                         StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            }
+            // B0-4 防丢失层：当日快照异步归档 MinIO（双开关未开时零副作用；失败仅告警）。
+            // 在锁外提交：快照读取由归档线程串行执行，与本地下一次追加写共享兼容
+            if (archiver != null) {
+                archiver.archiveAsync(file);
             }
         } catch (Exception e) {
             // 录制是观测能力：任何失败都不影响创作主链路

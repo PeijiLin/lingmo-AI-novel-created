@@ -1,6 +1,8 @@
 package com.linpj.novel.create.utils;
 
+import io.minio.BucketExistsArgs;
 import io.minio.GetObjectArgs;
+import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
@@ -52,6 +54,7 @@ public class FileUtil {
         }
 
         try {
+            ensureBucket(bucketName);
             minioClient.putObject(
                     PutObjectArgs.builder()
                             .bucket(bucketName)
@@ -64,6 +67,17 @@ public class FileUtil {
             return generatePreviewUrl(bucketName, objectName);
         } catch (Exception e) {
             throw new RuntimeException("文件上传失败");
+        }
+    }
+
+    /**
+     * 桶懒创建（B0-2 配套：换部署环境后桶不必预建——首个上传自动建桶）。
+     * 失败不做独立包装：探测/建桶异常与上传异常同走 catch 的"文件上传失败"语义。
+     */
+    private void ensureBucket(String bucketName) throws Exception {
+        boolean exists = minioClient.bucketExists(BucketExistsArgs.builder().bucket(bucketName).build());
+        if (!exists) {
+            minioClient.makeBucket(MakeBucketArgs.builder().bucket(bucketName).build());
         }
     }
 

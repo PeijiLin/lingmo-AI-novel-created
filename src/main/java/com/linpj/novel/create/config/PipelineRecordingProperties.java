@@ -22,6 +22,39 @@ public class PipelineRecordingProperties {
     /** JSONL 录制目录（相对工作目录；默认 .temp 临时区） */
     private String dir = ".temp/model-recordings";
 
+    /** 落盘后归档 MinIO（B0-4：实验数据防丢失——.temp 属本地临时区，录制 JSONL 是 S1/S4/S6 判据与消融复现的唯一数据源） */
+    private final Archive archive = new Archive();
+
+    public Archive getArchive() {
+        return archive;
+    }
+
+    /** 归档配置：仅当录制 enabled 且 archive.enabled 同时为真才生效（默认关：无 MinIO 环境零副作用） */
+    public static class Archive {
+
+        /** 归档开关（默认关） */
+        private boolean enabled = false;
+
+        /** 归档桶（不存在时懒创建） */
+        private String bucket = "novel-recordings";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getBucket() {
+            return bucket;
+        }
+
+        public void setBucket(String bucket) {
+            this.bucket = bucket;
+        }
+    }
+
     public boolean isEnabled() {
         return enabled;
     }
