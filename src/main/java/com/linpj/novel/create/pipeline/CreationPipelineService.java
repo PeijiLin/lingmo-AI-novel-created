@@ -109,6 +109,12 @@ public class CreationPipelineService {
     /** RAG 默认召回数（Spring AI VectorStoreDocumentRetriever 默认值；M5-F1 L1 档减半的基数） */
     static final int DEFAULT_RAG_TOP_K = 4;
 
+    // 节点标识（M5-F2 checkpoint：阶段:轮次命名空间；PRECISE 双稿/择优节点下一批扩展）
+    private static final String NODE_PLANNING = "PLANNING";
+    private static final String NODE_WRITING_R1 = "WRITING:1";
+    private static final String NODE_CRITIC_R1 = "CRITIC:1";
+    private static final String NODE_POLISHING = "POLISHING:1";
+
     /** PRECISE 双稿总超时（两稿并行，对齐单稿 Writer 180s） */
     private static final Duration DUAL_DRAFT_TIMEOUT = Duration.ofSeconds(180);
 
@@ -129,6 +135,8 @@ public class CreationPipelineService {
     private final StreamSafetyGate streamSafetyGate;
     /** 预算守卫配置（M5-F1：不可关闭，仅数值可配——降级语义为代码常量） */
     private final PipelineBudgetProperties budgetProperties;
+    /** 节点 checkpoint（M5-F2 断点续跑：可空——旁路能力，离线装配/单测无数据库环境时缺位） */
+    private final com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -163,7 +171,7 @@ public class CreationPipelineService {
                                     RuleExemptionService ruleExemptionService) {
         this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
                 contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
-                pipelineFeatures, ruleChecker, ruleExemptionService, null, null);
+                pipelineFeatures, ruleChecker, ruleExemptionService, null, null, new PipelineBudgetProperties());
     }
 
     /** 含定稿前 gate、不含中置流式拦截的装配（单测/离线装配用：E2 前行为） */
@@ -183,12 +191,13 @@ public class CreationPipelineService {
                                     FinalDraftGate finalDraftGate) {
         this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
                 contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
-                pipelineFeatures, ruleChecker, ruleExemptionService, finalDraftGate, null);
+                pipelineFeatures, ruleChecker, ruleExemptionService, finalDraftGate, null,
+                new PipelineBudgetProperties());
     }
 
     /**
-     * 兼容构造（测试/离线装配）：预算守卫不可关闭，默认数值实例兜底——
-     * 无预算环境（单测）仍持有守卫（默认 20 万 token/10 分钟，远高于测试用量，不触发降级）。
+     * 兼容构造（测试/离线装配）：预算守卫不可关闭，默认数值实例兑底；
+     * checkpoint 为旁路能力可空（无数据库环境零依赖）。
      */
     CreationPipelineService(WriterAgent writerAgent,
                                      CriticAgent criticAgent,
@@ -204,14 +213,17 @@ public class CreationPipelineService {
                                      RuleChecker ruleChecker,
                                      RuleExemptionService ruleExemptionService,
                                      FinalDraftGate finalDraftGate,
-                                     StreamSafetyGate streamSafetyGate) {
+                                     StreamSafetyGate streamSafetyGate,
+                                     PipelineBudgetProperties budgetProperties) {
         this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
                 contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
                 pipelineFeatures, ruleChecker, ruleExemptionService, finalDraftGate, streamSafetyGate,
-                new PipelineBudgetProperties());
+                budgetProperties, null);
     }
 
-    /** 生产装配（Spring 唯一注入点）：含定稿前安全 gate（M4-E3）、中置流式拦截（M4-E2）与预算守卫（M5-F1）。 */
+    /**
+     * 生产装配（Spring 唯一注入点）：安全 gate + 流式拦截 + 预算守卫 + 节点 checkpoint。
+     */
     @Autowired
     public CreationPipelineService(WriterAgent writerAgent,
                                      CriticAgent criticAgent,
@@ -228,7 +240,8 @@ public class CreationPipelineService {
                                      RuleExemptionService ruleExemptionService,
                                      FinalDraftGate finalDraftGate,
                                      StreamSafetyGate streamSafetyGate,
-                                     PipelineBudgetProperties budgetProperties) {
+                                     PipelineBudgetProperties budgetProperties,
+                                     com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -245,6 +258,7 @@ public class CreationPipelineService {
         this.finalDraftGate = finalDraftGate;
         this.streamSafetyGate = streamSafetyGate;
         this.budgetProperties = budgetProperties;
+        this.checkpointService = checkpointService;
     }
 
     // ------------------------------------------------------------------
@@ -394,6 +408,44 @@ public class CreationPipelineService {
         int limit = budget.ragTopLimit(DEFAULT_RAG_TOP_K);
         if (limit < DEFAULT_RAG_TOP_K) {
             context.setRagTopLimit(limit);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 节点 checkpoint（M5-F2：旁路落账 + 输入指纹；PLANNING 已恢复，Writer/Critic 恢复下一批）
+    // ------------------------------------------------------------------
+
+    /** Planner 节点输入指纹（复用判据：作者指令/章节未变才可恢复产物） */
+    private static String planningInputHash(PipelineRequest request) {
+        return sha256Of("book=" + request.getBookId()
+                + "|chapter=" + request.getChapterId()
+                + "|input=" + request.getUserInput()
+                + "|type=" + request.getCreationType());
+    }
+
+    /** 内容指纹（节点输入哈希的通用口径：null 容忍拼接） */
+    private static String sha256Of(String content) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            return java.util.HexFormat.of()
+                    .formatHex(digest.digest(content.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            // SHA-256 不可用时退化 hash：仍可区分输入变更（弱化但非失效）
+            return Integer.toHexString(content.hashCode());
+        }
+    }
+
+    /** 节点成功旁路落账（薄封装：服务缺位/故障静默——续跑资格损失绝不阻断管道） */
+    private void markNodeSucceeded(Long taskId, String nodeId, String inputHash, long tokens, String note) {
+        if (checkpointService == null) {
+            return;
+        }
+        try {
+            checkpointService.markSucceeded(taskId, nodeId, inputHash,
+                    (int) Math.min(Integer.MAX_VALUE, Math.max(0, tokens)), note);
+        } catch (Exception e) {
+            // 自防：服务层静默之外的任何故障（mock/半初始化）也不得反向影响节点语义
+            log.debug("checkpoint 落账异常（忽略）: runId={}, node={}, error={}", taskId, nodeId, e.getMessage());
         }
     }
 
@@ -626,6 +678,18 @@ public class CreationPipelineService {
                                     StageUsage usage, int total, Map<String, Boolean> features) {
         emitter.emitStage(StageEvent.started(StageCode.PLANNING, 1, total));
         creationTaskService.advanceStage(taskId, StageCode.PLANNING.name());
+        // F2 断点续跑（M5-F2）：同任务同输入的 PLANNING 已成功 → 恢复产物不重跑（零重复计费）。
+        // 复用条件三重判定：checkpoint 存在 + 输入哈希一致（作者指令未变）+ 产物本体仍在（outline 账本可查）
+        if (checkpointService != null && request.getChapterId() != null
+                && checkpointService.isResumable(taskId, NODE_PLANNING, planningInputHash(request))) {
+            ChapterOutline resumed = outlineStoreService.loadLatest(
+                    request.getBookId(), request.getChapterId());
+            if (resumed != null) {
+                log.info("断点续跑：恢复 PLANNING 产物（不重跑 Planner，零重复计费）: taskId={}", taskId);
+                return new PlanOutcome(resumed, false);
+            }
+            // 产物本体丢失（outline 账本被清理）：回退正常执行——宁可重做不可中途废
+        }
         try {
             PlannerContext plannerContext = contextAssemblyService.assemblePlannerContext(request);
             PlannerAgent.PlanResult planResult = plannerAgent.plan(plannerContext);
@@ -641,6 +705,8 @@ public class CreationPipelineService {
             saveArtifact(taskId, StageCode.PLANNING, 1, outline, planResult.tokens());
             // N3 细纲预审（v2.0 设计 5.1）：仅记录与落档，阻塞决策待人审卡点（B4/M3）
             runOutlineRuleCheck(request, taskId, outline, features);
+            // F2：节点成功旁路落账（同输入续跑的复用凭证；失败静默不阻管道）
+            markNodeSucceeded(taskId, NODE_PLANNING, planningInputHash(request), planResult.tokens(), null);
             return new PlanOutcome(outline, false);
         } catch (Exception e) {
             log.warn("Planner 失败，降级为直接续写: {}", e.getMessage());
@@ -680,6 +746,11 @@ public class CreationPipelineService {
             saveArtifact(taskId, StageCode.CRITIC, POLISH_VERIFY_ROUND, verify.report(), verify.tokens());
             usage.addTokens(verify.tokens());
             usage.setStages(usage.getStages() + 1);
+            // F2：润色节点旁路落账（输入指纹=润色前原稿；复核未过回退原稿时不上账——未采纳的事实不入账）
+            if (verify.report().isApproved()) {
+                markNodeSucceeded(taskId, NODE_POLISHING,
+                        sha256Of("draft=" + draft), polishResult.tokens() + verify.tokens(), null);
+            }
             if (!verify.report().isApproved()) {
                 log.warn("Polisher 复核未通过，回退润色前原稿: {}", verify.report().getSummary());
                 // 定稿前安全 gate（M4-E3）：回退稿同样要过 gate（润色被否不等于原稿干净）
@@ -735,6 +806,9 @@ public class CreationPipelineService {
         saveArtifact(taskId, StageCode.WRITING, 1, Map.of("text", writeResult.text()), writeResult.tokens());
         usage.addTokens(writeResult.tokens());
         usage.setStages(usage.getStages() + 1);
+        // F2：首写节点旁路落账（输入指纹=大纲；续跑恢复入口下一批接入，先积累复用凭证与计费审计）
+        markNodeSucceeded(taskId, NODE_WRITING_R1,
+                sha256Of("outline=" + outline + "|direct=" + request.getUserInput()), writeResult.tokens(), null);
 
         // —— Critic 首审（N5 规则校验并入：阻塞级 HIGH 违规与 Critic 问题同构参与重写触发）——
         // 预算止损（L4）：连评审的钱也不花（超限 20% 后停笔——正文已在 artifact，转人工）；
@@ -755,6 +829,11 @@ public class CreationPipelineService {
         saveArtifact(taskId, StageCode.CRITIC, 1, firstReview.report(), firstReview.tokens());
         usage.addTokens(firstReview.tokens());
         usage.setStages(usage.getStages() + 1);
+        // F2：首审节点旁路落账（输入指纹=待审正文；L3 预算跳审不落账——未执行的事实不入账）
+        if (baseReview.tokens() > 0) {
+            markNodeSucceeded(taskId, NODE_CRITIC_R1,
+                    sha256Of("draft=" + writeResult.text()), firstReview.tokens(), null);
+        }
 
         return rewriteLoop(request, taskId, emitter, usage, outline, writerContext,
                 writeResult.text(), firstReview.report(), writerIndex, total, features, writeResult.tokens(), budget);

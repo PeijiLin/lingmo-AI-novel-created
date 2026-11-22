@@ -225,3 +225,26 @@ CREATE INDEX IF NOT EXISTS idx_event_causal ON novel_event_timeline(book_id, cau
 -- planned_offset/deadline_offset 超期触发 RC-09 逾期告警并回灌 Planner（meta 信息，Writer 侧不下发）
 ALTER TABLE novel_plot_threads ADD COLUMN IF NOT EXISTS planned_offset  INTEGER;
 ALTER TABLE novel_plot_threads ADD COLUMN IF NOT EXISTS deadline_offset INTEGER;
+
+-- ---------------------------------------------------------------------------
+-- B3 批次（2026-11-22：F2 NodeCheckpoint——节点级断点续跑账本，M5-F2）
+-- ---------------------------------------------------------------------------
+
+-- 节点 checkpoint（编排器节点成功事实账本：断点续跑"不重放已完成节点副作用"的依据）
+-- - run_id = creation_task.id（任务级 run；features/入参快照在 creation_task.params）
+-- - node_id = 阶段:轮次（如 PLANNING / WRITING:1 / CRITIC:1；PRECISE 择优节点含 variant 维度时扩展命名）
+-- - input_hash = 节点核心输入的内容哈希（同输入的续跑才可复用产物；输入变更视为新节点意图）
+-- - 产物本体不重复存储：由 (run_id, stage, round) 定位 creation_stage_artifact 复用
+-- 只写 SUCCEEDED：失败/中断节点无 checkpoint，续跑时自然重做（重试语义而非跳过）
+CREATE TABLE IF NOT EXISTS novel_node_checkpoint (
+    id             BIGSERIAL PRIMARY KEY,
+    run_id         BIGINT NOT NULL,
+    node_id        VARCHAR(60) NOT NULL,
+    status         VARCHAR(20) NOT NULL DEFAULT 'SUCCEEDED',
+    input_hash     VARCHAR(64),
+    tokens         INTEGER,
+    note           VARCHAR(200),
+    created_at     TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_node_checkpoint UNIQUE (run_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_node_checkpoint_run ON novel_node_checkpoint(run_id);

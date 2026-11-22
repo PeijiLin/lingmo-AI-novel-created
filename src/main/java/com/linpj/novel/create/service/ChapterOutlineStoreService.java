@@ -16,4 +16,10 @@ public interface ChapterOutlineStoreService extends IService<NovelChapterOutline
 
     /** 读取本书最新一版大纲（断点续跑 / 调试用） */
     ChapterOutline loadLatest(Long bookId);
+
+    /**
+     * 读取指定章节的最新一版大纲（F2 断点续跑：多章节书的精确恢复口径——
+     * 按 bookId 取 latest 可能拿到其他章节的版本，恢复必须按 chapter 定位）。
+     */
+    ChapterOutline loadLatest(Long bookId, Long chapterId);
 }

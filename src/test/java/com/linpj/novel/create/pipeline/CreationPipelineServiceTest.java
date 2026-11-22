@@ -966,7 +966,8 @@ class CreationPipelineServiceTest {
         return new CreationPipelineService(writerAgent, criticAgent, plannerAgent, polisherAgent,
                 creationTaskService, artifactMapper, contextAssemblyService, plotThreadService,
                 outlineStoreService, creationEventProducer, pipelineFeatures, ruleChecker,
-                ruleExemptionService, gate, streamGate);
+                ruleExemptionService, gate, streamGate,
+                new com.linpj.novel.create.config.PipelineBudgetProperties());
     }
 
     /**
@@ -1284,5 +1285,90 @@ class CreationPipelineServiceTest {
         verify(writerAgent, times(1)).write(any(), any());
         verify(plannerAgent, times(1)).plan(any());
         verify(creationTaskService).completeTask(eq(68L), eq(true), anyInt(), anyLong());
+    }
+
+    // ------------------------------------------------------------------
+    // M5-F2：节点 checkpoint 旁路落账 + PLANNING 断点续跑恢复
+    // ------------------------------------------------------------------
+
+    @Mock private com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService;
+
+    private CreationPipelineService serviceWithCheckpoint() {
+        return new CreationPipelineService(writerAgent, criticAgent, plannerAgent, polisherAgent,
+                creationTaskService, artifactMapper, contextAssemblyService, plotThreadService,
+                outlineStoreService, creationEventProducer, pipelineFeatures, ruleChecker,
+                ruleExemptionService, null, null, new com.linpj.novel.create.config.PipelineBudgetProperties(),
+                checkpointService);
+    }
+
+    @Test
+    void F2_节点成功旁路落账不阻断管道() {
+        CreationPipelineService svc = serviceWithCheckpoint();
+        stubWriterContext();
+        stubCriticContext();
+        stubPlannerContext();
+        when(plannerAgent.plan(any())).thenReturn(new PlannerAgent.PlanResult(outline(), 80L));
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(polisherAgent.polish(any(), any(), any()))
+                .thenReturn(new PolisherAgent.PolishResult("润色稿", 60L));
+        when(criticAgent.verifyPolish(any(), anyString()))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 9), 30L));
+        // 落账故障：旁路能力静默容错（损失续跑资格但不阻创作）
+        org.mockito.Mockito.doThrow(new RuntimeException("checkpoint 库不可用"))
+                .when(checkpointService).markSucceeded(any(), any(), any(), any(), any());
+
+        svc.runAsync(71L, request(CreationMode.REFINED));
+
+        verify(checkpointService, org.mockito.Mockito.atLeastOnce())
+                .markSucceeded(eq(71L), any(), any(), any(), any());
+        verify(creationTaskService).completeTask(eq(71L), eq(false), anyInt(), anyLong());
+        verify(creationTaskService, never()).failTask(any(), any());
+    }
+
+    @Test
+    void F2_断点续跑恢复大纲_不重跑Planner零重复计费() {
+        CreationPipelineService svc = serviceWithCheckpoint();
+        stubWriterContext();
+        stubCriticContext();
+        when(checkpointService.isResumable(eq(72L), eq("PLANNING"), any())).thenReturn(true);
+        when(outlineStoreService.loadLatest(1L, 10L)).thenReturn(outline());
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(polisherAgent.polish(any(), any(), any()))
+                .thenReturn(new PolisherAgent.PolishResult("润色稿", 60L));
+        when(criticAgent.verifyPolish(any(), anyString()))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 9), 30L));
+
+        svc.runAsync(72L, request(CreationMode.REFINED));
+
+        // Planner 零调用 = 零重复计费（断点续跑"不重放已完成节点副作用"的核心价值）
+        verify(plannerAgent, never()).plan(any());
+        verify(contextAssemblyService, never()).assemblePlannerContext(any());
+        verify(writerAgent, times(1)).write(any(), any());
+        verify(creationTaskService).completeTask(eq(72L), eq(false), anyInt(), anyLong());
+    }
+
+    @Test
+    void F2_产物本体丢失回退正常执行() {
+        // checkpoint 存在但 outline 账本被清理：宁可重做不可中途废——Planner 照常执行
+        CreationPipelineService svc = serviceWithCheckpoint();
+        stubWriterContext();
+        stubCriticContext();
+        stubPlannerContext();
+        when(checkpointService.isResumable(eq(73L), eq("PLANNING"), any())).thenReturn(true);
+        when(outlineStoreService.loadLatest(1L, 10L)).thenReturn(null);
+        when(plannerAgent.plan(any())).thenReturn(new PlannerAgent.PlanResult(outline(), 80L));
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(polisherAgent.polish(any(), any(), any()))
+                .thenReturn(new PolisherAgent.PolishResult("润色稿", 60L));
+        when(criticAgent.verifyPolish(any(), anyString()))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 9), 30L));
+
+        svc.runAsync(73L, request(CreationMode.REFINED));
+
+        verify(plannerAgent, times(1)).plan(any());
+        verify(creationTaskService).completeTask(eq(73L), eq(false), anyInt(), anyLong());
     }
 }

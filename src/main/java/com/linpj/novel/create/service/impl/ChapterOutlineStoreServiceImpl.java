@@ -50,4 +50,19 @@ public class ChapterOutlineStoreServiceImpl extends ServiceImpl<NovelChapterOutl
                 .map(record -> JsonUtil.fromJson(JsonUtil.toJson(record.getOutline()), ChapterOutline.class))
                 .orElse(null);
     }
+
+    @Override
+    public ChapterOutline loadLatest(Long bookId, Long chapterId) {
+        if (bookId == null || chapterId == null) {
+            return null;
+        }
+        return this.list(new LambdaQueryWrapper<NovelChapterOutline>()
+                        .eq(NovelChapterOutline::getBookId, bookId)
+                        .eq(NovelChapterOutline::getChapterId, chapterId)
+                        .orderByDesc(NovelChapterOutline::getId)
+                        .last("LIMIT 1"))
+                .stream().findFirst()
+                .map(record -> JsonUtil.fromJson(JsonUtil.toJson(record.getOutline()), ChapterOutline.class))
+                .orElse(null);
+    }
 }
