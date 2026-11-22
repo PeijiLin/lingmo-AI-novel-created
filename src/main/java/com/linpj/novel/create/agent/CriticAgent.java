@@ -1,5 +1,6 @@
 package com.linpj.novel.create.agent;
 
+import com.linpj.novel.create.config.PipelineCriticModelProperties;
 import com.linpj.novel.create.pojo.pipeline.CriticContext;
 import com.linpj.novel.create.pojo.pipeline.ChapterOutline;
 import com.linpj.novel.create.pojo.pipeline.ReviewReport;
@@ -8,7 +9,11 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.converter.BeanOutputConverter;
+import org.springframework.ai.openai.OpenAiChatModel;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.Objects;
@@ -48,13 +53,46 @@ public class CriticAgent {
     private final RagAdvisorFactory ragAdvisorFactory;
     private final BeanOutputConverter<ReviewReport> converter = new BeanOutputConverter<>(ReviewReport.class);
 
-    public CriticAgent(ChatModel chatModel, RagAdvisorFactory ragAdvisorFactory, ModelCallLog modelCallLog) {
+    /**
+     * 生产装配（B2-3：异源 Critic）——未配置专用模型时回退主模型（现状行为）。
+     *
+     * @param criticModelProperties 异源模型配置（novel.pipeline.models.critic.*）
+     * @param mainApiKey            主配置 API Key（异源 key 未配置时继承）
+     * @param mainBaseUrl           主配置 base-url（异源 base-url 未配置时继承）
+     */
+    public CriticAgent(ChatModel chatModel, RagAdvisorFactory ragAdvisorFactory, ModelCallLog modelCallLog,
+                       PipelineCriticModelProperties criticModelProperties,
+                       @Value("${spring.ai.openai.chat.api-key:}") String mainApiKey,
+                       @Value("${spring.ai.openai.chat.base-url:}") String mainBaseUrl) {
         // 无记忆 ChatClient：审查独立判定；录制 advisor 置于最低优先级，
         // 记录 RAG 检索增强后的最终 prompt（回放确定性依赖此顺序）
-        this.chatClient = ChatClient.builder(chatModel)
+        this.chatClient = ChatClient.builder(
+                        resolveCriticModel(chatModel, criticModelProperties, mainApiKey, mainBaseUrl))
                 .defaultAdvisors(new ModelCallRecorder("CRITIC", modelCallLog))
                 .build();
         this.ragAdvisorFactory = ragAdvisorFactory;
+    }
+
+    /**
+     * 异源模型解析（B2-3）：配置了专用 model 时独立构建 OpenAiChatModel（同网关换模型），
+     * 否则回退主模型。包可见：供单测直接验证路由决策（不为测试暴露到 public API）。
+     */
+    static ChatModel resolveCriticModel(ChatModel primary,
+                                        PipelineCriticModelProperties properties,
+                                        String mainApiKey,
+                                        String mainBaseUrl) {
+        if (properties == null || properties.getModel() == null || properties.getModel().isBlank()) {
+            return primary; // 未配置：现状行为（与 Writer 同源）
+        }
+        String apiKey = properties.getApiKey() != null && !properties.getApiKey().isBlank()
+                ? properties.getApiKey() : mainApiKey;
+        String baseUrl = properties.getBaseUrl() != null && !properties.getBaseUrl().isBlank()
+                ? properties.getBaseUrl() : mainBaseUrl;
+        OpenAiApi api = OpenAiApi.builder().apiKey(apiKey).baseUrl(baseUrl).build();
+        return OpenAiChatModel.builder()
+                .openAiApi(api)
+                .defaultOptions(OpenAiChatOptions.builder().model(properties.getModel()).build())
+                .build();
     }
 
     /**
