@@ -1,5 +1,8 @@
 package com.linpj.novel.create.rule;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -32,6 +35,27 @@ final class RuleTexts {
             result = pattern.matcher(result).replaceAll("");
         }
         return result;
+    }
+
+    /**
+     * 提取对白引号内文（与 stripDialogue 同一引号口径；未闭合引号段不提取）。
+     * 称谓类规则（RC-08）只校验对白层——叙述层的称谓无法判定说话者与听话者。
+     */
+    static List<String> dialogueSegments(String text) {
+        List<String> segments = new ArrayList<>();
+        if (text == null) {
+            return segments;
+        }
+        for (Pattern pattern : DIALOGUE_PATTERNS) {
+            Matcher matcher = pattern.matcher(text);
+            while (matcher.find()) {
+                String inner = matcher.group().substring(1, matcher.group().length() - 1);
+                if (!inner.isBlank()) {
+                    segments.add(inner);
+                }
+            }
+        }
+        return segments;
     }
 
     /**
