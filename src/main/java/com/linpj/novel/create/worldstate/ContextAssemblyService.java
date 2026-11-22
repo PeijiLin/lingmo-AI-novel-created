@@ -22,6 +22,9 @@ import java.util.List;
  *
  * - worldSetting 以 book_info.world_setting 为唯一事实源；前端仍可传，仅当书籍未配置时生效（覆盖提示）
  * - story_digest / 活跃伏笔 / 人物动态状态 / 章节大纲从 World State 账本组装
+ * - 伏笔渲染双口径（B1-8，v2.0 4.4 可见性矩阵 - H4 隔离）：
+ *     Writer      → renderActiveThreads（只知"埋什么"，不知"何时收"——防提前兑付）
+ *     Planner/Critic → renderPlannerThreads（含回收排期与逾期提醒：规划与审查需要 meta）
  * - 长度预算硬控：总上下文约 8k token（中文 1 字 ≈ 1 token 折算），超预算按优先级裁剪：
  *   风格说明 < story_digest 截断 < 非出场角色 < 历史伏笔；出场角色卡与本章大纲永不裁
  *
@@ -100,7 +103,9 @@ public class ContextAssemblyService {
         context.setWorldSetting(resolveWorldSetting(request));
         context.setCharacterInfo(loadCharacterInfo(request.getBookId(), castIds(outline)));
         context.setStoryDigest(storyDigestService.getDigest(request.getBookId()));
-        context.setActivePlotThreads(plotThreadService.renderActiveThreads(request.getBookId()));
+        // meta 口径：Critic 审查"是否按排期兑付伏笔"需要知道排期（可见性矩阵 ✅）
+        context.setActivePlotThreads(plotThreadService.renderPlannerThreads(
+                request.getBookId(), request.getChapterId()));
         context.setOutline(outline);
         context.setUserInput(request.getUserInput());
         context.setCreationType(request.getCreationType());
@@ -122,7 +127,9 @@ public class ContextAssemblyService {
         context.setWorldSetting(resolveWorldSetting(request));
         context.setCharacterInfo(loadCharacterInfo(request.getBookId(), null));
         context.setStoryDigest(storyDigestService.getDigest(request.getBookId()));
-        context.setActivePlotThreads(plotThreadService.renderActiveThreads(request.getBookId()));
+        // meta 口径：Planner 规划回收时点需要排期与逾期提醒（逾期回灌，B1-3/B1-8）
+        context.setActivePlotThreads(plotThreadService.renderPlannerThreads(
+                request.getBookId(), request.getChapterId()));
         context.setCreationType(request.getCreationType());
         context.setStyle(request.getStyle());
         trimToBudget(context);

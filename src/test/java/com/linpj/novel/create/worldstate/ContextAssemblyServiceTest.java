@@ -207,7 +207,7 @@ class ContextAssemblyServiceTest {
         PipelineRequest req = request("界".repeat(7000));
         req.setStyle("风".repeat(500));
         when(storyDigestService.getDigest(1L)).thenReturn("摘".repeat(3000));
-        when(plotThreadService.renderActiveThreads(1L)).thenReturn("伏".repeat(500));
+        when(plotThreadService.renderPlannerThreads(1L, 10L)).thenReturn("伏".repeat(500));
 
         CriticContext context = service.assembleCriticContext(req, "待审正文", null);
 
@@ -228,7 +228,7 @@ class ContextAssemblyServiceTest {
         PipelineRequest req = request("界".repeat(7000));
         req.setStyle("风".repeat(500));
         when(storyDigestService.getDigest(1L)).thenReturn("摘".repeat(3000));
-        when(plotThreadService.renderActiveThreads(1L)).thenReturn("伏".repeat(500));
+        when(plotThreadService.renderPlannerThreads(1L, 10L)).thenReturn("伏".repeat(500));
 
         PlannerContext context = service.assemblePlannerContext(req);
 
@@ -237,5 +237,32 @@ class ContextAssemblyServiceTest {
         assertNull(context.getActivePlotThreads());
         assertNotNull(context.getCharacterInfo());
         assertTrue(context.getCharacterInfo().contains("角色ID: 1"), "角色选择基准永不裁");
+    }
+
+    // ------------------------------------------------------------------
+    // 伏笔渲染双口径（B1-8：H4 可见性隔离——排期 meta 只到 Planner/Critic，不到 Writer）
+    // ------------------------------------------------------------------
+
+    @Test
+    void 伏笔排期仅下发Planner与Critic不进Writer() {
+        when(bookInfoService.getById(1L)).thenReturn(null);
+        when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
+        when(characterStateService.renderStates(eq(1L), any())).thenReturn(null);
+        when(plotThreadService.renderActiveThreads(1L)).thenReturn("[伏笔#7] 断剑来历");
+        when(plotThreadService.renderPlannerThreads(1L, 10L))
+                .thenReturn("[伏笔#7] 断剑来历（须 5 章内回收）");
+
+        WriterContext writer = service.assembleWriterContext(request(null), null);
+        PlannerContext planner = service.assemblePlannerContext(request(null));
+        CriticContext critic = service.assembleCriticContext(request(null), "正文", null);
+
+        // Writer 只拿创作口径：知道"埋什么"但不知道"何时收"，防提前兑付；
+        // Polisher 不消费伏笔（无该上下文槽位），矩阵的 ❌ 侧由装配器强制保证而非提示词自觉
+        assertEquals("[伏笔#7] 断剑来历", writer.getActivePlotThreads(),
+                "Writer 不见排期 meta（H4 隔离）");
+        assertTrue(planner.getActivePlotThreads().contains("章内回收"),
+                "Planner 拿排期（逾期回灌与回收规划）");
+        assertTrue(critic.getActivePlotThreads().contains("章内回收"),
+                "Critic 拿排期（审查是否按计划兑付）");
     }
 }
