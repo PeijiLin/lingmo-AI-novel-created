@@ -289,7 +289,11 @@ public class CriticAgent {
     // Prompt 构建
     // ------------------------------------------------------------------
 
-    private String buildSystemPrompt() {
+    /**
+     * 审查规则全文（包可见：CriticL2Gateway 同源复用——L1/L2 评审规则字面同源，
+     * 防两套 prompt 口径漂移；自主性改造 R1a）。
+     */
+    static String reviewRulePrompt() {
         return """
                 你是严苛的小说责编，只做一致性审查，不评价文笔好坏。
 
@@ -317,6 +321,11 @@ public class CriticAgent {
                 【readOnScore：续读意愿 1-7 整数】
                 模拟本书的目标读者，读完本章后继续翻页的意愿（1=弃书，4=中性，7=熬夜追更）。
                 独立打分，不计入 overallScore。
+                """;
+    }
+
+    private String buildSystemPrompt() {
+        return reviewRulePrompt() + """
 
                 【输出要求】
                 只输出 JSON，不要输出任何解释性文字或 Markdown 代码块标记。

@@ -144,6 +144,8 @@ public class CreationPipelineService {
     /** 自主性矩阵（自主性改造 R0：可空——离线装配/单测无自主性配置时缺位；
      *  null 或 enabled=false 均为逐字节现状行为） */
     private final AutonomyProperties autonomyProperties;
+    /** Critic L2 网关（自主性改造 R1a：可空——试点包装，离线装配缺位时走 L1 现状） */
+    private final com.linpj.novel.create.agent.CriticL2Gateway criticL2Gateway;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -251,11 +253,11 @@ public class CreationPipelineService {
         this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
                 contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
                 pipelineFeatures, ruleChecker, ruleExemptionService, finalDraftGate, streamSafetyGate,
-                budgetProperties, checkpointService, null, null);
+                budgetProperties, checkpointService, null, null, null);
     }
 
     /**
-     * 生产装配（Spring 唯一注入点）：安全 gate + 流式拦截 + 预算守卫 + checkpoint + 成本账本 + 自主性矩阵。
+     * 生产装配（Spring 唯一注入点）：安全 gate + 流式拦截 + 预算守卫 + checkpoint + 成本账本 + 自主性矩阵 + Critic L2 网关。
      */
     @Autowired
     public CreationPipelineService(WriterAgent writerAgent,
@@ -276,7 +278,8 @@ public class CreationPipelineService {
                                      PipelineBudgetProperties budgetProperties,
                                      com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService,
                                      com.linpj.novel.create.worldstate.CostLedgerService costLedgerService,
-                                     AutonomyProperties autonomyProperties) {
+                                     AutonomyProperties autonomyProperties,
+                                     com.linpj.novel.create.agent.CriticL2Gateway criticL2Gateway) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -296,6 +299,7 @@ public class CreationPipelineService {
         this.checkpointService = checkpointService;
         this.costLedgerService = costLedgerService;
         this.autonomyProperties = autonomyProperties;
+        this.criticL2Gateway = criticL2Gateway;
     }
 
     // ------------------------------------------------------------------
@@ -651,7 +655,7 @@ public class CreationPipelineService {
             budget.markDegraded();
             reviewA = degradedPassReview("预算触顶 L3：跳过择优评审，采用 A 稿");
         } else {
-            reviewA = reviewDraft(request, resultA.text(), plan.outline());
+            reviewA = reviewDraft(request, taskId, emitter, "CRITIC:A", resultA.text(), plan.outline());
         }
         // ADR-6（v2.0 M3-D2，评审 N1 必改）：convergenceGuard 开启时选优用成对比较（同批评审消除跨调用绝对分漂移），
         // 关闭时保持现状绝对分比较（TIE 取 A 避免抖动）；绝对分仅继续作为通过的门槛判定
@@ -661,7 +665,7 @@ public class CreationPipelineService {
         usage.addTokens(resultA.tokens());
         CriticAgent.ReviewResult reviewB;
         if (resultB != null && !(budget != null && budget.level().atLeast(BudgetLevel.L3))) {
-            reviewB = reviewDraft(request, resultB.text(), plan.outline());
+            reviewB = reviewDraft(request, taskId, emitter, "CRITIC:B", resultB.text(), plan.outline());
             saveArtifact(taskId, StageCode.WRITING, PRECISE_REJECTED_ROUND,
                     Map.of("text", resultB.text(), "variant", 2, "note", "precise-rejected"), resultB.tokens());
             usage.addTokens(resultB.tokens());
@@ -918,7 +922,7 @@ public class CreationPipelineService {
             budget.markDegraded();
             baseReview = degradedPassReview("预算触顶 L3：跳过首审（评审降级保护）");
         } else {
-            baseReview = reviewDraft(request, writeResult.text(), outline);
+            baseReview = reviewDraft(request, taskId, emitter, NODE_CRITIC_R1, writeResult.text(), outline);
         }
         CriticAgent.ReviewResult firstReview =
                 reviewWithRules(request, taskId, writeResult.text(), outline, baseReview, features);
@@ -1000,7 +1004,8 @@ public class CreationPipelineService {
 
             emitter.emitStage(StageEvent.started(StageCode.CRITIC, writerIndex + 1, total));
             creationTaskService.advanceStage(taskId, StageCode.CRITIC.name());
-            CriticAgent.ReviewResult baseRecheck = reviewDraft(request, draft, outline);
+            CriticAgent.ReviewResult baseRecheck = reviewDraft(request, taskId, emitter,
+                    "CRITIC:" + (round + 1), draft, outline);
             CriticAgent.ReviewResult recheck =
                     reviewWithRules(request, taskId, draft, outline, baseRecheck, features);
             saveArtifact(taskId, StageCode.CRITIC, round + 1, recheck.report(), recheck.tokens());
@@ -1341,10 +1346,34 @@ public class CreationPipelineService {
     }
 
     /**
-     * Critic 执行：失败降级视为通过（Critic 假阳性会把对的改坏，宁可放过不可改错）
+     * Critic 执行（自主性改造 R1a：L2/L1 单点分发）。
+     *
+     * L2 分支（autonomy.enabled + REFINED/PRECISE 矩阵命中 + 依赖齐备）：CriticL2Gateway
+     * 有界循环（工具取证→收口），内建降级链（预算型→L1 / 契约型→降级报告转人审）；
+     * L2 故障安全网回 L1 现状调用（L2 试点绝不阻断管道——与 Critic 故障降级同哲学）。
+     * 其余情形：L1 现状逻辑逐字节不变。
      */
-    private CriticAgent.ReviewResult reviewDraft(PipelineRequest request, String draft, ChapterOutline outline) {
+    private CriticAgent.ReviewResult reviewDraft(PipelineRequest request, Long taskId, ProgressEmitter emitter,
+                                                 String criticNodeId, String draft, ChapterOutline outline) {
         CriticContext criticContext = contextAssemblyService.assembleCriticContext(request, draft, outline);
+        if (autonomyProperties != null && criticL2Gateway != null && taskId != null
+                && autonomyProperties.isL2(request.getMode(), AutonomyProperties.NODE_CRITIC)) {
+            try {
+                CriticAgent.ReviewResult reviewed =
+                        criticL2Gateway.review(request, criticContext, taskId, criticNodeId, emitter);
+                if (reviewed != null) {
+                    return reviewed;
+                }
+            } catch (Exception e) {
+                log.warn("Critic L2 网关异常（安全网回 L1）: taskId={}, node={}, error={}",
+                        taskId, criticNodeId, e.getMessage());
+            }
+        }
+        return reviewDraftL1(criticContext);
+    }
+
+    /** L1 现状调用：失败降级视为通过（Critic 假阳性会把对的改坏，宁可放过不可改错） */
+    private CriticAgent.ReviewResult reviewDraftL1(CriticContext criticContext) {
         try {
             return criticAgent.review(criticContext);
         } catch (Exception e) {

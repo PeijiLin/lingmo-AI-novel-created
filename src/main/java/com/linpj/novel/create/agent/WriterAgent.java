@@ -274,8 +274,8 @@ public class WriterAgent {
         }
     }
 
-    /** 从阻塞响应提取 token 用量，回退为 0 */
-    static long usageOf(ChatResponse response) {
+    /** 从阻塞响应提取 token 用量，回退为 0（public：AgentRuntime 复用——token 计量同口径） */
+    public static long usageOf(ChatResponse response) {
         if (response != null && response.getMetadata() != null
                 && response.getMetadata().getUsage() != null) {
             Usage usage = response.getMetadata().getUsage();
