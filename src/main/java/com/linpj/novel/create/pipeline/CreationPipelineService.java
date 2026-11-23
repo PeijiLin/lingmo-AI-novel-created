@@ -758,8 +758,10 @@ public class CreationPipelineService {
     /**
      * Polisher 阶段（情节不动硬约束 + Critic 复核；复核不过则回退原稿）。
      *
-     * 润色内容先缓冲不外发：复核通过才下发，复核不过以 REVISION(POLISHING) 事件重置客户端缓冲并补发原稿
-     * ——保证客户端看到的终稿与服务端采纳的终稿一致（否则复核失败的润色稿会残留在前端缓冲里被保存）。
+     * 润色内容以**草稿态实时下发**（M5-F3 / B6-2）：STARTED 事件携带 draft=true，
+     * 内容边润边发——作者实时看到润色进展；终稿在复核通过 + 定稿 gate 后以
+     * REVISION(POLISHING) 事件整体替换客户端缓冲（草稿随时可能被回退，不能直接当保存内容）。
+     * 润色流同样过 STREAM 层（M4-E2 对齐：所有生成型输出先拦后发，润色不是监控盲区）。
      */
     private boolean runPolishing(PipelineRequest request, Long taskId, ProgressEmitter emitter,
                                  StageUsage usage, ChapterOutline outline, String draft, ChapterBudget budget) {
@@ -771,12 +773,39 @@ public class CreationPipelineService {
             budget.markDegraded();
             return true;
         }
-        emitter.emitStage(StageEvent.started(StageCode.POLISHING, 4, 4));
+        // F3 草稿态：STARTED 带 draft=true（前端据此进入"草稿缓冲"呈现，终稿以 REVISION 替换）
+        emitter.emitStage(StageEvent.draft(StageCode.POLISHING, 4, 4));
         creationTaskService.advanceStage(taskId, StageCode.POLISHING.name());
+        StringBuilder polishBuffer = new StringBuilder();
+        // tee：既攒 buffer（复核/gate 用）又实时下发（草稿态）；外面包 STREAM guard（先拦后发）
+        StreamGuard polishGuard = streamSafetyGate == null ? null : streamSafetyGate.newGuard();
+        java.util.function.Consumer<String> tee = chunk -> {
+            polishBuffer.append(chunk);
+            emitter.emitContent(chunk);
+        };
+        Consumer<String> sink = polishGuard == null ? tee : polishGuard.guarded(tee);
+        PolisherAgent.PolishResult polishResult;
         try {
-            StringBuilder polishBuffer = new StringBuilder();
-            PolisherAgent.PolishResult polishResult =
-                    polisherAgent.polish(draft, request.getStyle(), polishBuffer::append);
+            polishResult = polisherAgent.polish(draft, request.getStyle(), sink);
+            if (polishGuard != null) {
+                polishGuard.flush(emitter::emitContent);
+            }
+        } catch (StreamSensitiveHitException hit) {
+            // 润色流命中：命中词已拦下未下发；润色是增益件——回退原稿（比重生成便宜且原稿已过 Writer 侧 STREAM）
+            // 审计记 REWRITE 桶（拦截率分子同口径：发生拦截且成功恢复，处置=截断回退）
+            if (streamSafetyGate != null) {
+                streamSafetyGate.recordRewrite(request.getBookId(), request.getChapterId(),
+                        hit.hits(), hit.partialText().length());
+            }
+            log.warn("润色流式中置拦截，回退润色前原稿: taskId={}, hits={}",
+                    taskId, FinalDraftGate.describe(hit.hits()));
+            return fallbackToOriginalDraft(request, taskId, emitter, outline, draft);
+        } catch (Exception e) {
+            log.warn("Polisher 失败，降级采用原稿: {}", e.getMessage());
+            // 草稿可能已部分下发：无论发没发过都 REVISION 重置后补发原稿（幂等，客户端缓冲终态一致）
+            return fallbackToOriginalDraft(request, taskId, emitter, outline, draft);
+        }
+        try {
             saveArtifact(taskId, StageCode.POLISHING, 1, Map.of("text", polishResult.text()), polishResult.tokens());
             usage.addTokens(polishResult.tokens());
             usage.setStages(usage.getStages() + 1);
@@ -794,25 +823,31 @@ public class CreationPipelineService {
             }
             if (!verify.report().isApproved()) {
                 log.warn("Polisher 复核未通过，回退润色前原稿: {}", verify.report().getSummary());
-                // 定稿前安全 gate（M4-E3）：回退稿同样要过 gate（润色被否不等于原稿干净）
-                GatedDraft gated = gateBeforeFinalize(request, taskId, outline, draft);
-                // 回退：重置客户端内容缓冲后补发原稿（与 REFINED/PRECISE 择优回退同一协议语义）
-                emitter.emitStage(StageEvent.revision(StageCode.POLISHING, 1));
-                emitter.emitContent(gated.text());
-                return true;
+                return fallbackToOriginalDraft(request, taskId, emitter, outline, draft);
             }
             // 定稿前安全 gate（M4-E3）：润色终稿定稿前过 gate，修复稿替换润色稿进入下方下发
             GatedDraft gated = gateBeforeFinalize(request, taskId, outline, polishResult.text());
-            // 复核通过：REVISION(POLISHING) 重置客户端缓冲（抹去 Writer 原稿）后下发润色终稿，
-            // 避免原稿与终稿在 content 流中拼接重复
+            // 复核通过：REVISION(POLISHING) 重置客户端缓冲（替换草稿态润色内容）后下发润色终稿——
+            // 无论 gate 是否修复都整体替换（幂等，客户端终态 = 服务端采纳终稿）
             emitter.emitStage(StageEvent.revision(StageCode.POLISHING, 1));
             emitter.emitContent(gated.text());
             return false;
         } catch (Exception e) {
-            log.warn("Polisher 失败，降级采用原稿: {}", e.getMessage());
-            // 润色内容未外发过，客户端缓冲仍是 Writer 终稿，无需回退信号
+            // 复核/gate 环节失败：草稿全文已下发，重置后补发润色稿（已有正文的最近可用版本）
+            log.warn("润色复核环节失败，采用已达草稿: {}", e.getMessage());
+            emitter.emitStage(StageEvent.revision(StageCode.POLISHING, 1));
+            emitter.emitContent(polishResult.text());
             return true;
         }
+    }
+
+    /** 润色回退：定稿 gate 校验原稿后，REVISION 重置客户端缓冲并补发（草稿态已污染缓冲时恢复一致） */
+    private boolean fallbackToOriginalDraft(PipelineRequest request, Long taskId, ProgressEmitter emitter,
+                                            ChapterOutline outline, String draft) {
+        GatedDraft gated = gateBeforeFinalize(request, taskId, outline, draft);
+        emitter.emitStage(StageEvent.revision(StageCode.POLISHING, 1));
+        emitter.emitContent(gated.text());
+        return true;
     }
 
     /** 伏笔记账：Planner 声明的 PLANT/RESOLVE + 终稿内联标记（均在终稿采纳后入账） */

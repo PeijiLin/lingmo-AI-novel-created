@@ -42,12 +42,26 @@ public class StageEvent implements Serializable {
     /** 失败原因（仅 FAILED 携带） */
     private String error;
 
+    /**
+     * 草稿态标记（仅 STARTED 携带；M5-F3 / B6-2）：
+     * true = 本阶段内容以草稿实时下发，终稿将以 REVISION 信号整体替换客户端缓冲
+     * （Polisher 润色流：作者实时看到润色过程，最终以复核+gate 后的版本为准）
+     */
+    private Boolean draft;
+
     public static StageEvent started(StageCode code, int index, int total) {
         StageEvent event = new StageEvent();
         event.setCode(code.name());
         event.setStatus("STARTED");
         event.setIndex(index);
         event.setTotal(total);
+        return event;
+    }
+
+    /** 草稿态阶段开始（F3：内容实时下发 + 终稿以 REVISION 替换） */
+    public static StageEvent draft(StageCode code, int index, int total) {
+        StageEvent event = started(code, index, total);
+        event.setDraft(Boolean.TRUE);
         return event;
     }
 

@@ -1469,4 +1469,107 @@ class CreationPipelineServiceTest {
                 () -> svc.runAsync(83L, request(CreationMode.FAST)));
         verify(creationTaskService).completeTask(eq(83L), eq(false), anyInt(), anyLong());
     }
+
+    // ------------------------------------------------------------------
+    // M5-F3（B6-2）：润色草稿态实时下发 + 终稿替换
+    // ------------------------------------------------------------------
+
+    @Test
+    void F3_润色草稿实时下发_终稿以REVISION替换() throws Exception {
+        stubWriterContext();
+        stubCriticContext();
+        stubPlannerContext();
+        when(plannerAgent.plan(any())).thenReturn(new PlannerAgent.PlanResult(outline(), 80L));
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(polisherAgent.polish(anyString(), any(), any())).thenAnswer(invocation -> {
+            java.util.function.Consumer<String> sink = invocation.getArgument(2);
+            sink.accept("润色草稿片段");
+            return new PolisherAgent.PolishResult("润色终稿", 60L);
+        });
+        when(criticAgent.verifyPolish(any(), anyString()))
+                .thenReturn(new CriticAgent.ReviewResult(report(true, 9), 30L));
+
+        List<ServerSentEvent<String>> events = runAndCollect(request(CreationMode.REFINED));
+
+        List<StageEvent> stages = stageEvents(events);
+        StageEvent polishStarted = stages.stream()
+                .filter(s -> "POLISHING".equals(s.getCode()) && "STARTED".equals(s.getStatus()))
+                .findFirst().orElseThrow();
+        assertTrue(Boolean.TRUE.equals(polishStarted.getDraft()), "润色阶段 STARTED 携带 draft=true（草稿态标记）");
+        assertTrue(stages.stream().anyMatch(s ->
+                        "POLISHING".equals(s.getCode()) && "REVISION".equals(s.getStatus())),
+                "终稿以 REVISION 整体替换草稿缓冲");
+        List<String> contents = contentTexts(events);
+        assertTrue(contents.contains("润色草稿片段"), "草稿实时下发（作者可见润色进展）");
+        assertTrue(contents.contains("润色终稿"), "终稿替换后下发");
+        verify(creationTaskService).completeTask(any(), eq(false), anyInt(), anyLong());
+    }
+
+    @Test
+    void F3_润色失败_草稿已下发则重置缓冲补发原稿() throws Exception {
+        stubWriterContext();
+        stubCriticContext();
+        stubPlannerContext();
+        when(plannerAgent.plan(any())).thenReturn(new PlannerAgent.PlanResult(outline(), 80L));
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("原稿", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(polisherAgent.polish(anyString(), any(), any())).thenAnswer(invocation -> {
+            java.util.function.Consumer<String> sink = invocation.getArgument(2);
+            sink.accept("残缺草稿"); // 失败前已流出一部分
+            throw new RuntimeException("润色网关中断");
+        });
+
+        List<ServerSentEvent<String>> events = runAndCollect(request(CreationMode.REFINED));
+
+        // 草稿已污染客户端缓冲：必须 REVISION 重置后补发原稿（缓冲终态 = 服务端采纳稿）
+        List<StageEvent> stages = stageEvents(events);
+        assertTrue(stages.stream().anyMatch(s ->
+                        "POLISHING".equals(s.getCode()) && "REVISION".equals(s.getStatus())),
+                "失败路径同样发送 POLISHING REVISION 重置信号");
+        List<String> contents = contentTexts(events);
+        assertTrue(contents.contains("原稿"), "失败后补发原稿");
+        verify(creationTaskService).completeTask(any(), eq(true), anyInt(), anyLong());
+    }
+
+    @Test
+    void F3_润色流命中词表_回退原稿且落STREAM审计() throws Exception {
+        // 可控词表：让润色流在第二个分包命中
+        com.linpj.novel.create.security.SensitiveTerms terms =
+                new com.linpj.novel.create.security.SensitiveTerms();
+        terms.getCategories().put("TEST", List.of("违禁词"));
+        com.linpj.novel.create.security.StreamSafetyGate streamGate =
+                new com.linpj.novel.create.security.StreamSafetyGate(terms, safetyAudit);
+        com.linpj.novel.create.config.PipelineBudgetProperties budget =
+                new com.linpj.novel.create.config.PipelineBudgetProperties();
+        CreationPipelineService svc = new CreationPipelineService(writerAgent, criticAgent,
+                plannerAgent, polisherAgent, creationTaskService, artifactMapper,
+                contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
+                pipelineFeatures, ruleChecker, ruleExemptionService, null, streamGate, budget, null, null);
+        stubWriterContext();
+        stubCriticContext();
+        stubPlannerContext();
+        when(plannerAgent.plan(any())).thenReturn(new PlannerAgent.PlanResult(outline(), 80L));
+        when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("原稿", 100L));
+        when(criticAgent.review(any())).thenReturn(new CriticAgent.ReviewResult(report(true, 8), 40L));
+        when(polisherAgent.polish(anyString(), any(), any())).thenAnswer(invocation -> {
+            java.util.function.Consumer<String> sink = invocation.getArgument(2);
+            sink.accept("干净的润色开头");
+            sink.accept("随后出现违禁词的尾巴"); // guard 命中即断
+            return new PolisherAgent.PolishResult("不该被采用", 60L);
+        });
+
+        List<ServerSentEvent<String>> events = runAndCollect(svc, request(CreationMode.REFINED));
+
+        // 命中词未到客户端；回退原稿；任务降级完成（润色是增益件，不是失败）。
+        // 截断点语义：命中的是第二分包，第一分包已下发前缀（窗口保留的尾巴随命中一并拦下）
+        List<String> contents = contentTexts(events);
+        assertTrue(contents.stream().noneMatch(text -> text.contains("违禁词")), "命中词在下发前已拦下");
+        assertTrue(contents.stream().anyMatch(text -> text.startsWith("干净")), "命中前的草稿前缀已实时下发（截断点语义）");
+        assertTrue(contents.contains("原稿"), "命中后回退润色前原稿");
+        verify(safetyAudit).record(eq(1L), eq("STREAM"), eq("WORDLIST_TEST"),
+                eq("REWRITE"), anyString());
+        verify(creationTaskService).completeTask(any(), eq(true), anyInt(), anyLong());
+        verify(criticAgent, never()).verifyPolish(any(), anyString());
+    }
 }
