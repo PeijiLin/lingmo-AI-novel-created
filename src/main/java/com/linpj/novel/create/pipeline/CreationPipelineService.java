@@ -5,6 +5,7 @@ import com.linpj.novel.create.agent.CriticAgent;
 import com.linpj.novel.create.agent.PlannerAgent;
 import com.linpj.novel.create.agent.PolisherAgent;
 import com.linpj.novel.create.agent.WriterAgent;
+import com.linpj.novel.create.config.AutonomyProperties;
 import com.linpj.novel.create.config.PipelineBudgetProperties;
 import com.linpj.novel.create.config.PipelineFeatures;
 import com.linpj.novel.create.mapper.novel.CreationStageArtifactMapper;
@@ -140,6 +141,9 @@ public class CreationPipelineService {
     private final com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService;
     /** 成本账本（M5-F4：可空——观测能力，任务终态单点入账） */
     private final com.linpj.novel.create.worldstate.CostLedgerService costLedgerService;
+    /** 自主性矩阵（自主性改造 R0：可空——离线装配/单测无自主性配置时缺位；
+     *  null 或 enabled=false 均为逐字节现状行为） */
+    private final AutonomyProperties autonomyProperties;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -242,16 +246,16 @@ public class CreationPipelineService {
                             RuleExemptionService ruleExemptionService,
                             FinalDraftGate finalDraftGate,
                             StreamSafetyGate streamSafetyGate,
-                            PipelineBudgetProperties budgetProperties,
-                            com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService) {
+                                     PipelineBudgetProperties budgetProperties,
+                                     com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService) {
         this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
                 contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
                 pipelineFeatures, ruleChecker, ruleExemptionService, finalDraftGate, streamSafetyGate,
-                budgetProperties, checkpointService, null);
+                budgetProperties, checkpointService, null, null);
     }
 
     /**
-     * 生产装配（Spring 唯一注入点）：安全 gate + 流式拦截 + 预算守卫 + checkpoint + 成本账本。
+     * 生产装配（Spring 唯一注入点）：安全 gate + 流式拦截 + 预算守卫 + checkpoint + 成本账本 + 自主性矩阵。
      */
     @Autowired
     public CreationPipelineService(WriterAgent writerAgent,
@@ -271,7 +275,8 @@ public class CreationPipelineService {
                                      StreamSafetyGate streamSafetyGate,
                                      PipelineBudgetProperties budgetProperties,
                                      com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService,
-                                     com.linpj.novel.create.worldstate.CostLedgerService costLedgerService) {
+                                     com.linpj.novel.create.worldstate.CostLedgerService costLedgerService,
+                                     AutonomyProperties autonomyProperties) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -290,6 +295,7 @@ public class CreationPipelineService {
         this.budgetProperties = budgetProperties;
         this.checkpointService = checkpointService;
         this.costLedgerService = costLedgerService;
+        this.autonomyProperties = autonomyProperties;
     }
 
     // ------------------------------------------------------------------
@@ -1448,6 +1454,12 @@ public class CreationPipelineService {
         snapshot.put("mode", request.getMode().name());
         snapshot.put("maxRewriteRounds", request.getMaxRewriteRounds());
         snapshot.put("features", pipelineFeatures.merged(request.getFeatures()));
+        // R0 自主性快照：仅 enabled 时落 params（OFF = params 逐字节现状，基线 diff 安全）。
+        // E5 分组自变量 = 该快照（enabled + 节点级 level/maxSteps/tokenBudget）——
+        // 实验行自带分组标签，不依赖事后回忆（方案 §11.5）
+        if (autonomyProperties != null && autonomyProperties.isEnabled()) {
+            snapshot.put("autonomy", autonomyProperties.snapshot(request.getMode()));
+        }
         return snapshot;
     }
 

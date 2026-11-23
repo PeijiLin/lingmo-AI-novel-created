@@ -1423,7 +1423,7 @@ class CreationPipelineServiceTest {
         return new CreationPipelineService(writerAgent, criticAgent, plannerAgent, polisherAgent,
                 creationTaskService, artifactMapper, contextAssemblyService, plotThreadService,
                 outlineStoreService, creationEventProducer, pipelineFeatures, ruleChecker,
-                ruleExemptionService, null, null, budget, null, costLedgerService);
+                ruleExemptionService, null, null, budget, null, costLedgerService, null);
     }
 
     @Test
@@ -1461,7 +1461,7 @@ class CreationPipelineServiceTest {
         CreationPipelineService svc = new CreationPipelineService(writerAgent, criticAgent,
                 plannerAgent, polisherAgent, creationTaskService, artifactMapper,
                 contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
-                pipelineFeatures, ruleChecker, ruleExemptionService, null, null, budget, null, null);
+                pipelineFeatures, ruleChecker, ruleExemptionService, null, null, budget, null, null, null);
         stubWriterContext();
         when(writerAgent.write(any(), any())).thenReturn(new WriterAgent.WriteResult("d1", 100L));
 
@@ -1545,7 +1545,7 @@ class CreationPipelineServiceTest {
         CreationPipelineService svc = new CreationPipelineService(writerAgent, criticAgent,
                 plannerAgent, polisherAgent, creationTaskService, artifactMapper,
                 contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
-                pipelineFeatures, ruleChecker, ruleExemptionService, null, streamGate, budget, null, null);
+                pipelineFeatures, ruleChecker, ruleExemptionService, null, streamGate, budget, null, null, null);
         stubWriterContext();
         stubCriticContext();
         stubPlannerContext();

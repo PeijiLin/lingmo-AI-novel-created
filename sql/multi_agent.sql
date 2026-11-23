@@ -298,3 +298,57 @@ CREATE TABLE IF NOT EXISTS novel_cost_ledger (
     CONSTRAINT uk_cost_ledger UNIQUE (run_id, node)
 );
 CREATE INDEX IF NOT EXISTS idx_cost_ledger_book ON novel_cost_ledger(book_id);
+
+-- ---------------------------------------------------------------------------
+-- R0 批次（2026-11-23）：自主性改造——有界 Agent 运行时的步骤级 Checkpoint 与工具回执
+-- 方案：docs/AGENTIC_RUNTIME_PLAN.md §5/§11（含实施前修正案）；基线 tag v2.0-baseline
+-- ---------------------------------------------------------------------------
+
+-- AgentRuntime 步骤账本（每步模型决策落盘 = 步骤级 Checkpoint；
+-- 恢复时已完成步骤从回执重放，不重新调模型/工具——不重复计费）
+-- - node_id = 阶段:轮次（与 novel_node_checkpoint 同命名空间）；step_no 从 1 起，1 步 = 1 次模型调用
+-- - kind = 步骤类型：TOOL_CALL / ASK_HUMAN / FINISH（决策三出口，R1a 工具化）
+-- - decision = 模型结构化决策原文（kill-resume 重放消息序列的数据源；动态部分纯函数推导）
+-- - status 状态机位：RUNNING（落盘即占位）→ DONE / FAILED / SKIPPED；崩溃残留 RUNNING，续跑重做该步
+-- - receipt_id → novel_tool_receipt.id（tool_call 步的真实回执；失败/被拒工具不推进状态）
+-- - tokens = 本步模型调用 token：B5 节点总账之下的步级明细账（E5 消融取数层，总账-明细两层共存）
+CREATE TABLE IF NOT EXISTS novel_agent_step (
+    id          BIGSERIAL PRIMARY KEY,
+    run_id      BIGINT NOT NULL,
+    node_id     VARCHAR(60) NOT NULL,
+    step_no     INTEGER NOT NULL,
+    kind        VARCHAR(20) NOT NULL,
+    decision    JSONB,
+    receipt_id  BIGINT,
+    status      VARCHAR(20) NOT NULL DEFAULT 'RUNNING',
+    tokens      INTEGER NOT NULL DEFAULT 0,
+    note        VARCHAR(200),
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_agent_step UNIQUE (run_id, node_id, step_no)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_step_run ON novel_agent_step(run_id);
+
+-- 工具回执账本（真实回执驱动：模型不消费"想象的结果"，只消费落盘回执）
+-- - 内容+次数寻址幂等：UNIQUE(run,node,tool,args_hash,attempt)——同 attempt 重放返回既有回执
+--   （kill-resume 不重复执行/计费）；attempt 入键而非省略，是让"崩溃后重试预算"可从表推导：
+--   最新 attempt 的 ok=false 才允许 attempt+1（工具契约"重试<=1"），纯内容寻址会把重试卡死在失败回执上
+-- - 仅 run 内幂等，跨 run 不缓存（正典漂移防线：跨 run 的事实可能已变，重查便宜）
+-- - ok=false 失败回照样落盘（失败不推进状态 ≠ 失败不留痕）
+-- - 证据 ID 派生规则（修正案 M1）：evidence 类工具结果每条 = ev:<receipt_id>#<序号>（代码生成，
+--   finish 引文只认 ID，引文校验退化为确定性存在性校验——引文有效率上限从"模型能力"变"工具可回显性"）
+-- - result 一律视为不可信数据区：工具输出只作事实材料，消费侧不得当指令（注入防线）
+CREATE TABLE IF NOT EXISTS novel_tool_receipt (
+    id          BIGSERIAL PRIMARY KEY,
+    run_id      BIGINT NOT NULL,
+    node_id     VARCHAR(60) NOT NULL,
+    tool        VARCHAR(60) NOT NULL,
+    args_hash   VARCHAR(64) NOT NULL,
+    attempt     INTEGER NOT NULL DEFAULT 0,
+    result      JSONB,
+    ok          BOOLEAN NOT NULL DEFAULT FALSE,
+    tokens      INTEGER NOT NULL DEFAULT 0,
+    cost_ms     BIGINT NOT NULL DEFAULT 0,
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_tool_receipt UNIQUE (run_id, node_id, tool, args_hash, attempt)
+);
+CREATE INDEX IF NOT EXISTS idx_tool_receipt_run ON novel_tool_receipt(run_id);

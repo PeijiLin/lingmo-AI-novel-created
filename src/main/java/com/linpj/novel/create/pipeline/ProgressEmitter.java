@@ -1,5 +1,6 @@
 package com.linpj.novel.create.pipeline;
 
+import com.linpj.novel.create.pojo.pipeline.AgentEvent;
 import com.linpj.novel.create.pojo.pipeline.StageEvent;
 import com.linpj.novel.create.utils.JsonUtil;
 import org.springframework.http.codec.ServerSentEvent;
@@ -49,6 +50,18 @@ public class ProgressEmitter {
             return;
         }
         emit("content", JsonUtil.toJson(Map.of("text", text)));
+    }
+
+    /**
+     * 推送 Agent 进度事件（自主性改造 R0：单一 agent 通道 + kind 判别）。
+     * 事件名固定 "agent"，类别由 {@link AgentEvent#getKind()} 区分（七类）——
+     * 向后兼容：老 stage/content 事件零改动，前端不认识 agent 事件可忽略。
+     */
+    public void emitAgent(AgentEvent event) {
+        if (event == null) {
+            return;
+        }
+        emit("agent", JsonUtil.toJson(event));
     }
 
     private void emit(String eventName, String data) {
