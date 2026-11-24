@@ -146,6 +146,8 @@ public class CreationPipelineService {
     private final AutonomyProperties autonomyProperties;
     /** Critic L2 网关（自主性改造 R1a：可空——试点包装，离线装配缺位时走 L1 现状） */
     private final com.linpj.novel.create.agent.CriticL2Gateway criticL2Gateway;
+    /** Writer L2 网关（自主性改造 R2a：可空——首写位试点，缺位时走 L1 现状） */
+    private final com.linpj.novel.create.agent.WriterL2Gateway writerL2Gateway;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -253,11 +255,11 @@ public class CreationPipelineService {
         this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
                 contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
                 pipelineFeatures, ruleChecker, ruleExemptionService, finalDraftGate, streamSafetyGate,
-                budgetProperties, checkpointService, null, null, null);
+                budgetProperties, checkpointService, null, null, null, null);
     }
 
     /**
-     * 生产装配（Spring 唯一注入点）：安全 gate + 流式拦截 + 预算守卫 + checkpoint + 成本账本 + 自主性矩阵 + Critic L2 网关。
+     * 生产装配（Spring 唯一注入点）：安全 gate + 流式拦截 + 预算守卫 + checkpoint + 成本账本 + 自主性矩阵 + Critic/Writer L2 网关。
      */
     @Autowired
     public CreationPipelineService(WriterAgent writerAgent,
@@ -279,7 +281,8 @@ public class CreationPipelineService {
                                      com.linpj.novel.create.worldstate.NodeCheckpointService checkpointService,
                                      com.linpj.novel.create.worldstate.CostLedgerService costLedgerService,
                                      AutonomyProperties autonomyProperties,
-                                     com.linpj.novel.create.agent.CriticL2Gateway criticL2Gateway) {
+                                     com.linpj.novel.create.agent.CriticL2Gateway criticL2Gateway,
+                                     com.linpj.novel.create.agent.WriterL2Gateway writerL2Gateway) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -300,6 +303,7 @@ public class CreationPipelineService {
         this.costLedgerService = costLedgerService;
         this.autonomyProperties = autonomyProperties;
         this.criticL2Gateway = criticL2Gateway;
+        this.writerL2Gateway = writerL2Gateway;
     }
 
     // ------------------------------------------------------------------
@@ -509,7 +513,7 @@ public class CreationPipelineService {
         emitter.emitStage(StageEvent.started(StageCode.WRITING, 1, total));
         creationTaskService.advanceStage(taskId, StageCode.WRITING.name());
         WriterContext writerContext = contextAssemblyService.assembleWriterContext(request, null);
-        WriterAgent.WriteResult result = writeWithRetry(writerContext, emitter, null, null);
+        WriterAgent.WriteResult result = writeFirstDraft(request, taskId, emitter, writerContext);
         // 定稿前安全 gate（M4-E3）：命中则修复式改写，改写稿整体重置客户端缓冲后重发
         GatedDraft gated = gateBeforeFinalize(request, taskId, null, result.text());
         if (gated.repaired()) {
@@ -903,7 +907,7 @@ public class CreationPipelineService {
         }
         WriterAgent.WriteResult writeResult = resumedDraft != null
                 ? new WriterAgent.WriteResult(resumedDraft, 0L) // 恢复稿零计费（token 已在首跑入账）
-                : writeWithRetry(writerContext, emitter, null, null);
+                : writeFirstDraft(request, taskId, emitter, writerContext);
         saveArtifact(taskId, StageCode.WRITING, 1, Map.of("text", writeResult.text()), writeResult.tokens());
         usage.addTokens(writeResult.tokens());
         usage.setStages(usage.getStages() + 1);
@@ -1271,6 +1275,32 @@ public class CreationPipelineService {
     // ------------------------------------------------------------------
     // 阶段执行（含失败策略）
     // ------------------------------------------------------------------
+
+    /**
+     * Writer 首写执行（自主性改造 R2a：L2/L1 单点分发——首写位 WRITING:1）。
+     *
+     * L2 分支（autonomy.enabled + 矩阵命中 + 依赖齐备）：WriterL2Gateway 有界循环
+     *（工具取证→提案暂存→收口），内建降级链；L2 故障/返回空走安全网回 L1 现状路径
+     * （writeWithRetry 的重试+流式拦截语义保留——L2 试点绝不阻断管道）。
+     * 重写轮次与 PRECISE 双稿保持 L1（绞杀者逐步，R2b/R3 再评估）。
+     */
+    private WriterAgent.WriteResult writeFirstDraft(PipelineRequest request, Long taskId,
+                                                    ProgressEmitter emitter, WriterContext writerContext) {
+        if (autonomyProperties != null && writerL2Gateway != null && taskId != null
+                && autonomyProperties.isL2(request.getMode(), AutonomyProperties.NODE_WRITER)) {
+            try {
+                WriterAgent.WriteResult result =
+                        writerL2Gateway.write(request, writerContext, taskId, NODE_WRITING_R1, emitter);
+                if (result != null && result.text() != null && !result.text().isBlank()) {
+                    return result;
+                }
+                log.warn("Writer L2 返回空（安全网回 L1）: taskId={}", taskId);
+            } catch (Exception e) {
+                log.warn("Writer L2 网关异常（安全网回 L1）: taskId={}, error={}", taskId, e.getMessage());
+            }
+        }
+        return writeWithRetry(writerContext, emitter, null, null);
+    }
 
     /**
      * Writer 执行：失败重试 1 次；再失败则管道失败（设计 4.4）。

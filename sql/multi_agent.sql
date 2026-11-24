@@ -378,3 +378,25 @@ CREATE TABLE IF NOT EXISTS novel_citation_link (
     CONSTRAINT uk_citation_link UNIQUE (run_id, node_id, step_no, evidence_id)
 );
 CREATE INDEX IF NOT EXISTS idx_citation_link_run ON novel_citation_link(run_id);
+
+-- ---------------------------------------------------------------------------
+-- R2a 批次（2026-11-24）：正典提案暂存账本——Writer L2 proposal.emit 协议
+-- 方案 §2：proposal.emit 只暂存不写入；提交门在节点 SUCCESS 后统一提交（消费端 R3 接）
+-- ---------------------------------------------------------------------------
+-- 提案形态（proposal JSONB）：{type: STATE, characterId, state, note}——对应 novel_state_fact 结构
+-- - 幂等：UNIQUE(run, node, proposal_hash) 内容寻址（同提案重复 emit 跳过——工具重放走回执层）
+-- - status 状态机：PENDING（暂存）→ ADOPTED / REJECTED（R3 提交门裁定，审计不可变只补记）
+-- - receipt_id 关联工具回执（proposal.emit 调用的审计链）
+CREATE TABLE IF NOT EXISTS novel_canon_proposal (
+    id            BIGSERIAL PRIMARY KEY,
+    run_id        BIGINT NOT NULL,
+    node_id       VARCHAR(60) NOT NULL,
+    step_no       INTEGER,
+    receipt_id    BIGINT,
+    proposal      JSONB NOT NULL,
+    proposal_hash VARCHAR(64) NOT NULL,
+    status        VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    created_at    TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_canon_proposal UNIQUE (run_id, node_id, proposal_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_canon_proposal_run ON novel_canon_proposal(run_id);

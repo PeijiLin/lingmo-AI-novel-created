@@ -178,6 +178,7 @@ public class CriticL2Gateway {
                   "issues":{"type":"array","items":{"type":"object","properties":{
                     "type":{"type":"string","enum":["CHARACTER_OOC","TIMELINE","PLOT_HOLE","WORLDVIEW_CONFLICT","STYLE_DRIFT"]},
                     "severity":{"type":"string","enum":["HIGH","MEDIUM","LOW"]},
+                    "problem":{"type":"string","description":"问题描述（一句话讲清矛盾是什么）"},
                     "evidence":{"type":"string"},
                     "evidenceId":{"type":"string","description":"支撑该问题的证据地址（工具回执生成，HIGH 问题必填）"},
                     "suggestion":{"type":"string"}}}},
