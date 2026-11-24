@@ -43,6 +43,10 @@ public class PipelineRequest implements Serializable {
     /** 机制开关请求级覆盖（null = 部署默认；仅已知键生效，见 PipelineFeatures.merged） */
     private Map<String, Boolean> features;
 
+    /** 自主性等级请求级覆盖（R2b L4 定制档：PLANNER/WRITER/CRITIC → "L1"/"L2"；
+     *  未知键/值忽略；优先级：覆盖 > 模式矩阵 > L1 兑底；null = 矩阵默认） */
+    private Map<String, String> autonomyOverrides;
+
     /** 本章目标字数（可空：未配置时 RC-11 字数规则静默） */
     private Integer targetWordCount;
 
@@ -67,6 +71,7 @@ public class PipelineRequest implements Serializable {
             pipelineRequest.setMaxRewriteRounds(Math.min(3, Math.max(1, request.getMaxRewriteRounds())));
         }
         pipelineRequest.setFeatures(request.getFeatures());
+        pipelineRequest.setAutonomyOverrides(request.getAutonomyOverrides());
         pipelineRequest.setTargetWordCount(request.getTargetWordCount());
         pipelineRequest.setPov(request.getPov());
         return pipelineRequest;

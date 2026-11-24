@@ -42,4 +42,11 @@ public class AiChatRequest implements Serializable {
      * 未知键服务端忽略；null/缺省 = 用部署默认值。实验时一次只覆盖一个开关。
      */
     Map<String, Boolean> features;
+
+    /**
+     * 自主性等级请求级覆盖（自主性改造 R2b，L4 定制档）：
+     * 键为节点名（PLANNER/WRITER/CRITIC），值 "L1"/"L2"（大小写宽容）；
+     * 未知键/未知值服务端忽略；null/缺省 = 用模式矩阵默认。优先级：请求覆盖 > 矩阵 > L1 兜底。
+     */
+    Map<String, String> autonomyOverrides;
 }

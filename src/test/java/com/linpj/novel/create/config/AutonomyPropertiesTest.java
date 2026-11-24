@@ -115,8 +115,50 @@ class AutonomyPropertiesTest {
         assertEquals(AutonomyProperties.LEVEL_L2,
                 props.resolve(CreationMode.PRECISE, AutonomyProperties.NODE_CRITIC).getLevel());
         assertEquals(3, props.resolve(CreationMode.PRECISE, AutonomyProperties.NODE_CRITIC).getMaxSteps());
-        // 替换后未包含的模式/节点走兑底 L1
+        // 替换后未包含的模式/节点走兜底 L1
         assertFalse(props.isL2(CreationMode.REFINED, AutonomyProperties.NODE_CRITIC));
         assertFalse(props.isL2(CreationMode.PRECISE, AutonomyProperties.NODE_WRITER));
+    }
+
+    @Test
+    void 请求级覆盖优先级与总闸约束() {
+        AutonomyProperties props = new AutonomyProperties();
+        props.setEnabled(true);
+
+        // 覆盖开 L2：低档模式（矩阵 L1）被请求覆盖拉起——L4 定制档语义
+        assertTrue(props.isL2(CreationMode.FAST, AutonomyProperties.NODE_CRITIC,
+                Map.of("CRITIC", "L2")), "覆盖 > 矩阵");
+        // 覆盖压 L1：高档模式（矩阵 L2）被请求覆盖关闭——成本旋钮
+        assertFalse(props.isL2(CreationMode.REFINED, AutonomyProperties.NODE_CRITIC,
+                Map.of("CRITIC", "L1")));
+        // 大小写宽容 + 未知值忽略（用矩阵为 L1 的节点：未知值不得意外拉起 L2）
+        assertTrue(props.isL2(CreationMode.REFINED, AutonomyProperties.NODE_WRITER,
+                Map.of("writer", "l2")));
+        assertFalse(props.isL2(CreationMode.FAST, AutonomyProperties.NODE_CRITIC,
+                Map.of("CRITIC", "L3")), "未知值忽略——防拼写错误改变实验分组");
+        assertFalse(props.isL2(CreationMode.REFINED, "READER",
+                Map.of("READER", "L2")), "未知节点忽略（polisher 等保持 L1）");
+
+        // 总闸硬约束：enabled=false 时覆盖不可开 L2（围栏先于自主性红线）
+        props.setEnabled(false);
+        assertFalse(props.isL2(CreationMode.FAST, AutonomyProperties.NODE_CRITIC,
+                Map.of("CRITIC", "L2")));
+    }
+
+    @Test
+    void 快照含覆盖生效等级与覆盖原文() {
+        AutonomyProperties props = new AutonomyProperties();
+        props.setEnabled(true);
+        Map<String, Object> snap = props.snapshot(CreationMode.FAST,
+                Map.of("CRITIC", "L2"));
+
+        assertEquals("FAST", snap.get("mode"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> overrides = (Map<String, Object>) snap.get("overrides");
+        assertEquals("L2", overrides.get("CRITIC"), "覆盖原文入快照（分组标签记请求自变量）");
+        @SuppressWarnings("unchecked")
+        Map<String, Map<String, Object>> nodes = (Map<String, Map<String, Object>>) snap.get("nodes");
+        assertEquals(2, nodes.get("CRITIC").get("level"), "快照记覆盖后生效等级（真实自变量）");
+        assertEquals(1, nodes.get("PLANNER").get("level"), "未覆盖节点走矩阵默认");
     }
 }

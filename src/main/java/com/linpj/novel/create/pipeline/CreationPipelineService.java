@@ -148,6 +148,8 @@ public class CreationPipelineService {
     private final com.linpj.novel.create.agent.CriticL2Gateway criticL2Gateway;
     /** Writer L2 网关（自主性改造 R2a：可空——首写位试点，缺位时走 L1 现状） */
     private final com.linpj.novel.create.agent.WriterL2Gateway writerL2Gateway;
+    /** Planner L2 网关（自主性改造 R2b：可空——大纲位试点，缺位时走 L1 现状） */
+    private final com.linpj.novel.create.agent.PlannerL2Gateway plannerL2Gateway;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -255,11 +257,11 @@ public class CreationPipelineService {
         this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
                 contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
                 pipelineFeatures, ruleChecker, ruleExemptionService, finalDraftGate, streamSafetyGate,
-                budgetProperties, checkpointService, null, null, null, null);
+                budgetProperties, checkpointService, null, null, null, null, null);
     }
 
     /**
-     * 生产装配（Spring 唯一注入点）：安全 gate + 流式拦截 + 预算守卫 + checkpoint + 成本账本 + 自主性矩阵 + Critic/Writer L2 网关。
+     * 生产装配（Spring 唯一注入点）：安全 gate + 流式拦截 + 预算守卫 + checkpoint + 成本账本 + 自主性矩阵 + Critic/Writer/Planner L2 网关。
      */
     @Autowired
     public CreationPipelineService(WriterAgent writerAgent,
@@ -282,7 +284,8 @@ public class CreationPipelineService {
                                      com.linpj.novel.create.worldstate.CostLedgerService costLedgerService,
                                      AutonomyProperties autonomyProperties,
                                      com.linpj.novel.create.agent.CriticL2Gateway criticL2Gateway,
-                                     com.linpj.novel.create.agent.WriterL2Gateway writerL2Gateway) {
+                                     com.linpj.novel.create.agent.WriterL2Gateway writerL2Gateway,
+                                     com.linpj.novel.create.agent.PlannerL2Gateway plannerL2Gateway) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -304,6 +307,7 @@ public class CreationPipelineService {
         this.autonomyProperties = autonomyProperties;
         this.criticL2Gateway = criticL2Gateway;
         this.writerL2Gateway = writerL2Gateway;
+        this.plannerL2Gateway = plannerL2Gateway;
     }
 
     // ------------------------------------------------------------------
@@ -747,7 +751,7 @@ public class CreationPipelineService {
         }
         try {
             PlannerContext plannerContext = contextAssemblyService.assemblePlannerContext(request);
-            PlannerAgent.PlanResult planResult = plannerAgent.plan(plannerContext);
+            PlannerAgent.PlanResult planResult = planDraft(request, taskId, plannerContext);
             ChapterOutline outline = planResult.outline();
             usage.addTokens(planResult.tokens());
             usage.setStages(usage.getStages() + 1);
@@ -767,6 +771,32 @@ public class CreationPipelineService {
             log.warn("Planner 失败，降级为直接续写: {}", e.getMessage());
             return new PlanOutcome(null, true);
         }
+    }
+
+    /**
+     * Planner 执行（自主性改造 R2b：L2/L1 单点分发）。
+     *
+     * L2 分支（autonomy.enabled + 矩阵命中）：PlannerL2Gateway 有界循环
+     *（大纲草案→rulecheck.run 验可行性→修订→收口）；L2 故障/返空走安全网回 L1
+     *（现有降级链：Planner 失败→直接续写——上游 try-catch 语义保留）。
+     */
+    private PlannerAgent.PlanResult planDraft(PipelineRequest request, Long taskId,
+                                              PlannerContext plannerContext) {
+        if (autonomyProperties != null && plannerL2Gateway != null && taskId != null
+                && autonomyProperties.isL2(request.getMode(), AutonomyProperties.NODE_PLANNER,
+                request.getAutonomyOverrides())) {
+            try {
+                PlannerAgent.PlanResult result = plannerL2Gateway.plan(
+                        request, plannerContext, taskId, NODE_PLANNING, null);
+                if (result != null && result.outline() != null) {
+                    return result;
+                }
+                log.warn("Planner L2 返回空（安全网回 L1）: taskId={}", taskId);
+            } catch (Exception e) {
+                log.warn("Planner L2 网关异常（安全网回 L1）: taskId={}, error={}", taskId, e.getMessage());
+            }
+        }
+        return plannerAgent.plan(plannerContext);
     }
 
     /**
@@ -1287,7 +1317,8 @@ public class CreationPipelineService {
     private WriterAgent.WriteResult writeFirstDraft(PipelineRequest request, Long taskId,
                                                     ProgressEmitter emitter, WriterContext writerContext) {
         if (autonomyProperties != null && writerL2Gateway != null && taskId != null
-                && autonomyProperties.isL2(request.getMode(), AutonomyProperties.NODE_WRITER)) {
+                && autonomyProperties.isL2(request.getMode(), AutonomyProperties.NODE_WRITER,
+                request.getAutonomyOverrides())) {
             try {
                 WriterAgent.WriteResult result =
                         writerL2Gateway.write(request, writerContext, taskId, NODE_WRITING_R1, emitter);
@@ -1387,7 +1418,8 @@ public class CreationPipelineService {
                                                  String criticNodeId, String draft, ChapterOutline outline) {
         CriticContext criticContext = contextAssemblyService.assembleCriticContext(request, draft, outline);
         if (autonomyProperties != null && criticL2Gateway != null && taskId != null
-                && autonomyProperties.isL2(request.getMode(), AutonomyProperties.NODE_CRITIC)) {
+                && autonomyProperties.isL2(request.getMode(), AutonomyProperties.NODE_CRITIC,
+                request.getAutonomyOverrides())) {
             try {
                 CriticAgent.ReviewResult reviewed =
                         criticL2Gateway.review(request, criticContext, taskId, criticNodeId, emitter);
@@ -1517,7 +1549,8 @@ public class CreationPipelineService {
         // E5 分组自变量 = 该快照（enabled + 节点级 level/maxSteps/tokenBudget）——
         // 实验行自带分组标签，不依赖事后回忆（方案 §11.5）
         if (autonomyProperties != null && autonomyProperties.isEnabled()) {
-            snapshot.put("autonomy", autonomyProperties.snapshot(request.getMode()));
+            snapshot.put("autonomy", autonomyProperties.snapshot(request.getMode(),
+                    request.getAutonomyOverrides()));
         }
         return snapshot;
     }
