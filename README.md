@@ -11,7 +11,7 @@ lingmo-AI-novel-created/
 │   ├── sql/            # 数据库增量脚本
 │   ├── pom.xml
 │   └── README.md       # 后端详细说明
-├── lingmo-web/         # 前端（规划中，暂未创建）
+├── lingmo-web/         # 前端（Vue 3 + Vite + TypeScript）
 ├── AGENTS.md           # 仓库级开发约定（含后端命令与陷阱）
 └── .gitignore
 ```
@@ -35,9 +35,21 @@ mvn spring-boot:run # 启动服务
 
 数据库初始化顺序与配置项说明见 [lingmo-server/README.md](lingmo-server/README.md)，开发约定与已知陷阱见 [AGENTS.md](AGENTS.md)。
 
-## 前端
+## 前端快速开始
 
-`lingmo-web/` 规划中。前端工程将独立放在该目录，不要在仓库根目录放 `package.json`。
+前端工程位于 `lingmo-web/`（Vue 3 + Vite + TypeScript，npm）。所有前端命令都在该目录下执行，仓库根目录不放 `package.json`：
+
+```bash
+cd lingmo-web
+npm ci                # 安装依赖（需 Node ^20.19 或 >=22.12）
+npm run dev           # 开发服务器 5173，/api 代理到 localhost:8088
+npm run build         # 类型检查 + 生产构建
+npm run test:unit -- --run  # Vitest 单测
+npx eslint .          # 代码检查（npm run lint 会自动修复）
+```
+
+> Windows PowerShell 下若 `npm` 被执行策略拦截，改用 `npm.cmd`。
+> 前端由原 `novel-creation-front` 仓库以 `git subtree` 导入，历史保留；后续同步：`git subtree pull --prefix=lingmo-web front master`。
 
 ## 许可证
 

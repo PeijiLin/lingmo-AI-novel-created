@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Monorepo for a novel-creation platform: Spring Boot 3.4.5 / Java 17 backend in `lingmo-server/`; the `lingmo-web/` frontend is planned but not present yet. Single Maven module; no CI.
+Monorepo for a novel-creation platform: Spring Boot 3.4.5 / Java 17 backend in `lingmo-server/`; Vue 3 + Vite + TypeScript frontend in `lingmo-web/`. Single Maven module; no CI.
 
 ## Commands
 
@@ -11,6 +11,15 @@ Run Maven commands from `lingmo-server/` (the repo root has no `pom.xml`).
 - `mvn -DskipTests package`; `mvn spring-boot:run` for the app.
 - Java 17 + Maven 3.9.x. There is no `mvnw`/`mvnw.cmd` (only `lingmo-server/.mvn/wrapper/maven-wrapper.properties`); use system/IDE Maven.
 - `lingmo-server/pom.xml` sets source encoding to UTF-8. Keep it: on Chinese Windows the default GBK breaks compilation of Chinese comments/strings.
+
+Frontend commands run from `lingmo-web/` (npm; on Windows PowerShell use `npm.cmd` because `npm.ps1` is blocked by execution policy):
+
+- `npm ci` — install (Node `^20.19.0 || >=22.12.0`).
+- `npm run dev` — Vite dev server on 5173, proxies `/api` to `localhost:8088`.
+- `npm run build` — `vue-tsc --build` + `vite build`. `npm run type-check` alone for types.
+- `npm run test:unit -- --run` — Vitest (jsdom) one-shot; plain `test:unit` is watch mode.
+- `npx eslint .` — check only; `npm run lint` applies `--fix`.
+- `lingmo-web/` was imported via `git subtree` from the `novel-creation-front` repo (remote `front`); update with `git subtree pull --prefix=lingmo-web front master`.
 
 ## Run / setup
 
@@ -47,5 +56,5 @@ Run Maven commands from `lingmo-server/` (the repo root has no `pom.xml`).
 
 ## Verification
 
-- No lint/formatter/static-analysis config and no CI. `cd lingmo-server && mvn test` is the gate.
+- No lint/formatter/static-analysis config for the backend and no CI. `cd lingmo-server && mvn test` is the backend gate. Frontend gate: `cd lingmo-web && npm.cmd run type-check && npm.cmd run test:unit -- --run && npm.cmd run build`.
 - Tests are unit-level; there is no test profile/config for Spring-context tests.

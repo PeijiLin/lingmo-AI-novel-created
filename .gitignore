@@ -51,8 +51,8 @@ application-local.yml
 # dev-config
 application-dev.yml
 
-# Local design docs (keep local, not in git)
-docs/
+# Local design docs (keep local, not in git) — repo-root only; lingmo-web/docs is tracked
+/docs/
 # Agent temp files
 .temp/
 
