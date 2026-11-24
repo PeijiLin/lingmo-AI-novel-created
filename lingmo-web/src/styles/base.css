@@ -1,0 +1,99 @@
+/**
+ * 纸墨书卷 · 基础样式
+ * 全站底座：reset 补丁、字体装载、焦点可达性、动效克制、纸感滚动条。
+ */
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+/* 标题：书名 / 章题用宋，衬线书卷气 */
+h1,
+h2,
+h3 {
+  font-family: var(--font-book);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* 链接：品牌主色，纸面不做背景块 */
+a {
+  color: var(--ink-indigo);
+  text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-paper);
+}
+
+a:hover {
+  color: var(--cinnabar);
+}
+
+/* 键盘可达性：焦点环取品牌主色，仅键盘导航显示 */
+:focus-visible {
+  outline: 2px solid var(--ink-indigo);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* 选区：朱砂淡晕 */
+::selection {
+  background-color: rgba(180, 68, 59, 0.16);
+  color: var(--ink);
+}
+
+/* 动效克制：尊重系统减弱动效设置 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 纸感滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--mist-line);
+  border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--mist);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--mist-line) transparent;
+}
+
+/* 稿纸 / 阅读排版的公共细节（组件内引用） */
+.paper-texture {
+  background-color: var(--paper-surface);
+  box-shadow: var(--shadow-card);
+}

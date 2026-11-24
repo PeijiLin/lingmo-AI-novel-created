@@ -1,0 +1,5 @@
+/* 纸墨书卷 · 样式入口（Tailwind 4 CSS-first，无 tailwind.config） */
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+@import "../styles/tokens.css";
+@import "../styles/base.css";
