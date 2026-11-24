@@ -29,9 +29,11 @@ public interface AgentTool {
     /**
      * 执行（只经 Registry 调用）。
      *
-     * @return 结果文本（喂回模型的 ToolResponse；null 视为空结果）
+     * @return 结构化条目 {@code List<Map<String,Object>>}——证据型工具返回条目列表，
+     *         Registry 落回执（存原文）后注入 evidenceId 喂模型（引文协议 R1b，§11.1-M1）；
+     *         或纯文本 String（错误提示/非证据结果）原样喂回。
      */
-    String execute(AgentToolContext context, String argumentsJson) throws Exception;
+    Object execute(AgentToolContext context, String argumentsJson) throws Exception;
 
     /** 工具执行上下文（run/node 寻址 + 业务数据面 bookId/chapterId 等） */
     record AgentContext(Long runId, String nodeId, Map<String, Object> data) {

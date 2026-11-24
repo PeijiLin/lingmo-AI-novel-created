@@ -93,10 +93,11 @@ public class AgentRuntime {
             return runLoop(task);
         } catch (Exception e) {
             // 未归档异常：转 DEGRADED（节点侧按各自语义消费）；L2 已烧 token 由账本如实记录
-            log.warn("AgentRuntime 未归档异常（转 DEGRADED）: run={}, node={}, error={}",
-                    task.runId(), task.nodeId(), e.getMessage());
+            log.warn("AgentRuntime 未归档异常（转 DEGRADED）: run={}, node={}",
+                    task.runId(), task.nodeId(), e);
             long spent = stepService.tokensUsed(task.runId(), task.nodeId());
-            return new AgentResult.Degraded("runtime-error: " + e.getMessage(), spent, 0);
+            return new AgentResult.Degraded("runtime-error: "
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()), spent, 0);
         }
     }
 
@@ -269,7 +270,7 @@ public class AgentRuntime {
     }
 
     /**
-     * 单独 finish 的收口处理。
+     * 单独 finish 的收口处理：结构校验 → 引文校验（R1b）→ 修复步一次/契约失败。
      *
      * @return SUCCESS/Degraded 终态；null = 进入修复步（重建消息由下一轮 build 从 FAILED 账行推导）
      */
@@ -279,6 +280,14 @@ public class AgentRuntime {
         DeliverableContract.ContractCheck check = deliverableJson == null
                 ? DeliverableContract.ContractCheck.fail("finish 参数缺失 deliverable")
                 : task.contract().validate(deliverableJson);
+        if (check.ok()) {
+            // R1b 引文硬校验：结构过了还要引文可回验（evidenceId 存在性+界内+文本一致）
+            DeliverableContract.CitationOutcome citations =
+                    task.contract().verifyCitations(call.arguments(), stepNo);
+            if (!citations.ok()) {
+                check = DeliverableContract.ContractCheck.fail("引文校验未通过: " + citations.violations());
+            }
+        }
         if (check.ok()) {
             recordStep(task, stepNo, KIND_FINISH,
                     finishDecision(call.arguments(), call.id(), null), null,

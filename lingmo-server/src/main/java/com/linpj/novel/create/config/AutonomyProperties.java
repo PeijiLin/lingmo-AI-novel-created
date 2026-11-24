@@ -96,19 +96,56 @@ public class AutonomyProperties {
     }
 
     /**
+     * 请求级覆盖判定（R2b，L4 定制档）：优先级 覆盖 > 矩阵（矩阵级总闸仍硬约束——
+     * enabled=false 时覆盖不可开 L2，防绕围栏）。
+     *
+     * @param overrides 节点→"L1"/"L2"（大小写宽容；未知键/值忽略——PipelineFeatures.merged 同款纪律）
+     */
+    public boolean isL2(CreationMode mode, String node, Map<String, String> overrides) {
+        if (overriddenLevel(node, overrides) == LEVEL_L2) {
+            return enabled; // 覆盖开 L2 仍受总闸约束（围栏先于自主性红线）
+        }
+        if (overriddenLevel(node, overrides) == LEVEL_L1) {
+            return false; // 覆盖压 L1：高档模式也可关某节点自主性（成本旋钮）
+        }
+        return isL2(mode, node);
+    }
+
+    /** 覆盖值解析（仅三 agent 节点接受覆盖——其余节点无 L2 实现，覆盖无效；未知值返回 -1 = 无覆盖语义） */
+    private int overriddenLevel(String node, Map<String, String> overrides) {
+        if (overrides == null || node == null
+                || !node.equals(NODE_PLANNER) && !node.equals(NODE_WRITER) && !node.equals(NODE_CRITIC)) {
+            return -1;
+        }
+        String value = overrides.get(node);
+        if (value == null) {
+            return -1;
+        }
+        return switch (value.trim().toUpperCase()) {
+            case "L1" -> LEVEL_L1;
+            case "L2" -> LEVEL_L2;
+            default -> -1; // 未知值忽略（防拼写错误悄悄改变实验分组）
+        };
+    }
+
+    /**
      * 任务级快照（E5 分组自变量；随 creation_task.params 落库）。
      * 仅 enabled 时被调用落盘——OFF 状态 params 逐字节现状。
+     * R2b：快照含请求级覆盖结果（覆盖后的生效等级——分组标签记真实自变量）。
      */
-    public Map<String, Object> snapshot(CreationMode mode) {
+    public Map<String, Object> snapshot(CreationMode mode, Map<String, String> overrides) {
         Map<String, Object> snap = new LinkedHashMap<>();
         snap.put("enabled", enabled);
         if (mode != null) {
             snap.put("mode", mode.name());
+            if (overrides != null && !overrides.isEmpty()) {
+                snap.put("overrides", new LinkedHashMap<>(overrides));
+            }
             Map<String, Object> nodes = new LinkedHashMap<>();
             for (String node : new String[]{NODE_PLANNER, NODE_WRITER, NODE_CRITIC}) {
                 NodeSetting setting = resolve(mode, node);
                 Map<String, Object> nodeSnap = new LinkedHashMap<>();
-                nodeSnap.put("level", setting.getLevel());
+                nodeSnap.put("level", isL2(mode, node, overrides) ? LEVEL_L2 : LEVEL_L1);
                 nodeSnap.put("maxSteps", setting.getMaxSteps());
                 nodeSnap.put("tokenBudget", setting.getTokenBudget());
                 nodes.put(node, nodeSnap);
@@ -116,6 +153,11 @@ public class AutonomyProperties {
             snap.put("nodes", nodes);
         }
         return snap;
+    }
+
+    /** 兼容保留（无覆盖路径） */
+    public Map<String, Object> snapshot(CreationMode mode) {
+        return snapshot(mode, null);
     }
 
     /** 时间预算与步数围栏（§4 设计矩阵默认值；数值待 S10 成本实验校准） */

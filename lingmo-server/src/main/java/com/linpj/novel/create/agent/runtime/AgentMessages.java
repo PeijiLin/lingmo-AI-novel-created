@@ -104,13 +104,17 @@ public final class AgentMessages {
         for (Map<String, Object> receiptRef : decision.receipts()) {
             String callId = String.valueOf(receiptRef.getOrDefault("callId", "call_unknown"));
             String name = String.valueOf(receiptRef.getOrDefault("name", "unknown"));
-            // 回执重建优先级：receiptId 落盘回执（幂等重放）→ 内联 result（deferred/拒绝场景）→ 缺省占位
+            // 回执重建优先级：receiptId 落盘回执（幂等重放，结构化原文重打 evidenceId
+            // ——纯函数保 kill-resume 序列与不中断运行一致，R1b 引文协议）
+            // → 内联 result（deferred/拒绝场景）→ 缺省占位
             Object receiptIdObj = receiptRef.get("receiptId");
             String resultText;
             if (receiptIdObj instanceof Number number) {
                 NovelToolReceipt receipt = receiptLoader.apply(number.longValue());
                 resultText = receipt != null && receipt.getResult() != null
-                        ? String.valueOf(receipt.getResult())
+                        ? com.linpj.novel.create.agent.tool.EvidenceCodec.rewrap(
+                                receipt.getId() == null ? number.longValue() : receipt.getId(),
+                                String.valueOf(receipt.getResult()))
                         : "（回执缺失：receiptId=" + receiptIdObj + "）";
             } else if (receiptRef.get("result") != null) {
                 resultText = String.valueOf(receiptRef.get("result"));

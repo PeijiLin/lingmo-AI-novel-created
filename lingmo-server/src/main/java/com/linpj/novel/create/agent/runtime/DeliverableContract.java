@@ -30,6 +30,20 @@ public interface DeliverableContract {
      */
     ContractCheck validate(String deliverableJson);
 
+    /**
+     * 引文校验钩子（R1b 引文协议，§11.1-M1）：结构校验通过后由 Runtime 调用。
+     *
+     * <p>节点实现逐条校验 evidenceId（确定性存在性：回执存在+序号界内+文本一致）
+     * 并落引文绑定账（ok 与否都留痕）；R2 Writer/Planner 按各自语义实现
+     * （提案合法性等）。默认通过（L1a 阶段实现无需感知）。
+     *
+     * @param finishArgumentsJson finish 工具参数原文（含 deliverable/claims/unresolved 全树）
+     * @param stepNo             收口步号（引文账本定位）
+     */
+    default CitationOutcome verifyCitations(String finishArgumentsJson, int stepNo) {
+        return CitationOutcome.pass();
+    }
+
     /** 结构校验结果 */
     record ContractCheck(boolean ok, String violations) {
 
@@ -39,6 +53,14 @@ public interface DeliverableContract {
 
         public static ContractCheck fail(String violations) {
             return new ContractCheck(false, violations == null ? "校验未通过" : violations);
+        }
+    }
+
+    /** 引文校验结果（total/valid 供 E5 引文有效率指标与 SSE 事件） */
+    record CitationOutcome(boolean ok, String violations, int total, int valid) {
+
+        public static CitationOutcome pass() {
+            return new CitationOutcome(true, null, 0, 0);
         }
     }
 }

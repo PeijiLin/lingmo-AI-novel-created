@@ -1,18 +1,23 @@
 package com.linpj.novel.create.agent;
 
 import com.linpj.novel.create.agent.runtime.AgentFence;
-import com.linpj.novel.create.agent.runtime.AgentRuntime;
+import com.linpj.novel.create.agent.runtime.AgentProtocol;
 import com.linpj.novel.create.agent.runtime.AgentResult;
+import com.linpj.novel.create.agent.runtime.AgentRuntime;
 import com.linpj.novel.create.agent.runtime.AgentTask;
 import com.linpj.novel.create.agent.runtime.DeliverableContract;
 import com.linpj.novel.create.agent.tool.CanonQueryTool;
+import com.linpj.novel.create.agent.tool.EvidenceCodec;
 import com.linpj.novel.create.agent.tool.SummaryGetTool;
 import com.linpj.novel.create.config.AutonomyProperties;
 import com.linpj.novel.create.config.PipelineCriticModelProperties;
+import com.linpj.novel.create.pojo.entity.NovelToolReceipt;
 import com.linpj.novel.create.pojo.pipeline.CriticContext;
 import com.linpj.novel.create.pojo.pipeline.PipelineRequest;
 import com.linpj.novel.create.pojo.pipeline.ReviewReport;
 import com.linpj.novel.create.utils.JsonUtil;
+import com.linpj.novel.create.worldstate.CitationLinkService;
+import com.linpj.novel.create.worldstate.ToolReceiptService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -60,34 +65,45 @@ public class CriticL2Gateway {
     private final AgentRuntime agentRuntime;
     private final AutonomyProperties autonomyProperties;
     private final CriticAgent criticAgent;
+    private final ToolReceiptService receiptService;
+    private final CitationLinkService citationLinkService;
 
     /**
-     * 生产装配：ChatClient 与 CriticAgent 同款异源路由 + CRITIC-L2 录制。
+     * 生产装配：ChatClient 与 CriticAgent 同款异源路由 + CRITIC-L2 录制；
+     * 引文校验依赖回执账/引文账（R1b）。多构造器场景显式标注注入点。
      */
+    @org.springframework.beans.factory.annotation.Autowired
     public CriticL2Gateway(ChatModel chatModel,
                            ModelCallLog modelCallLog,
                            AgentRuntime agentRuntime,
                            AutonomyProperties autonomyProperties,
                            CriticAgent criticAgent,
+                           ToolReceiptService receiptService,
+                           CitationLinkService citationLinkService,
                            PipelineCriticModelProperties criticModelProperties,
                            @Value("${spring.ai.openai.chat.api-key:}") String mainApiKey,
                            @Value("${spring.ai.openai.chat.base-url:}") String mainBaseUrl) {
         this.agentRuntime = agentRuntime;
         this.autonomyProperties = autonomyProperties;
         this.criticAgent = criticAgent;
+        this.receiptService = receiptService;
+        this.citationLinkService = citationLinkService;
         this.chatClient = ChatClient.builder(
                         CriticAgent.resolveCriticModel(chatModel, criticModelProperties, mainApiKey, mainBaseUrl))
                 .defaultAdvisors(new ModelCallRecorder("CRITIC-L2", modelCallLog))
                 .build();
     }
 
-    /** 测试装配：直传预制 ChatClient（回放桩） */
+    /** 测试装配：直传预制 ChatClient（回放桩）与引文账依赖 */
     CriticL2Gateway(ChatClient chatClient, AgentRuntime agentRuntime,
-                    AutonomyProperties autonomyProperties, CriticAgent criticAgent) {
+                    AutonomyProperties autonomyProperties, CriticAgent criticAgent,
+                    ToolReceiptService receiptService, CitationLinkService citationLinkService) {
         this.chatClient = chatClient;
         this.agentRuntime = agentRuntime;
         this.autonomyProperties = autonomyProperties;
         this.criticAgent = criticAgent;
+        this.receiptService = receiptService;
+        this.citationLinkService = citationLinkService;
     }
 
     /**
@@ -107,7 +123,7 @@ public class CriticL2Gateway {
                 AgentFence.of(maxSteps, tokenBudget, CRITIC_L2_WALL_CLOCK_MS,
                         Set.of(CanonQueryTool.NAME, SummaryGetTool.NAME)),
                 systemPrompt(), taskPrompt(context), chatClient,
-                reviewReportContract(),
+                criticContract(runId, criticNodeId),
                 // 预算型降级：L1 现状调用（同源 CriticContext；L2 工具成果不注入——消融基线隔离）
                 () -> criticAgent.review(context),
                 toolContext(request, context),
@@ -152,7 +168,7 @@ public class CriticL2Gateway {
     // 契约与提示词
     // ------------------------------------------------------------------
 
-    /** ReviewReport 的 JSON Schema（deliverable 结构同构 L1 产出——消费侧零改动） */
+    /** ReviewReport 的 JSON Schema（deliverable 结构同构 L1 产出——消费侧零改动；R1b 增 issues[].evidenceId） */
     static String reviewReportSchema() {
         return """
                 {"type":"object","properties":{
@@ -162,15 +178,22 @@ public class CriticL2Gateway {
                   "issues":{"type":"array","items":{"type":"object","properties":{
                     "type":{"type":"string","enum":["CHARACTER_OOC","TIMELINE","PLOT_HOLE","WORLDVIEW_CONFLICT","STYLE_DRIFT"]},
                     "severity":{"type":"string","enum":["HIGH","MEDIUM","LOW"]},
+                    "problem":{"type":"string","description":"问题描述（一句话讲清矛盾是什么）"},
                     "evidence":{"type":"string"},
+                    "evidenceId":{"type":"string","description":"支撑该问题的证据地址（工具回执生成，HIGH 问题必填）"},
                     "suggestion":{"type":"string"}}}},
                   "dimensionScores":{"type":"object"},
                   "readOnScore":{"type":"integer","minimum":1,"maximum":7}
                 },"required":["approved","overallScore","summary","issues"]}""";
     }
 
-    /** ReviewReport 同构契约（R1a 结构校验：可解析 + 必填非空） */
-    static DeliverableContract reviewReportContract() {
+    /**
+     * Critic 收口契约（实例：捕获 run/node 上下文）。
+     * 双层校验：结构（required 键 + 必填非空）→ 引文（R1b 硬校验：evidenceId 确定性存在性，
+     * 校验即落账 citation_link——ok 与否都留痕，E5 引文有效率数据源）。
+     * claims[] 完整协议（text+evidenceId 数组）R2 随 proposal.emit 扩展。
+     */
+    DeliverableContract criticContract(Long runId, String nodeId) {
         return new DeliverableContract() {
             @Override
             public String finishSchema() {
@@ -180,7 +203,8 @@ public class CriticL2Gateway {
             @Override
             public String expectations() {
                 return "交付与 L1 完全同构的审查报告 JSON（approved/overallScore/summary/issues 必填；"
-                        + "每个 issue 附 evidence 原文引用；无法用工具查证的问题不得上报）";
+                        + "每个 HIGH 问题必须附 evidenceId（工具回执中的证据地址）与 evidence 原文引用；"
+                        + "无法用工具查证的问题不得上报）";
             }
 
             @Override
@@ -203,7 +227,90 @@ public class CriticL2Gateway {
                 }
                 return ContractCheck.passed();
             }
+
+            @Override
+            public CitationOutcome verifyCitations(String finishArgumentsJson, int stepNo) {
+                return verifyIssueCitations(runId, nodeId, stepNo, finishArgumentsJson);
+            }
         };
+    }
+
+    /**
+     * 引文硬校验（R1b，§11.1-M1）：HIGH 问题必须绑定 evidenceId 且可回验；
+     * MEDIUM/LOW 鼓励绑定（不强制——宽松起步，S 系实验看数据再收紧）。
+     * 校验即落账：ok 与否都写 citation_link（幂等），防"报了问题但证据是幻觉"。
+     */
+    private DeliverableContract.CitationOutcome verifyIssueCitations(Long runId, String nodeId, int stepNo, String finishArgumentsJson) {
+        try {
+            String deliverableJson = AgentProtocol.extractDeliverable(finishArgumentsJson);
+            com.google.gson.JsonObject deliverable =
+                    com.google.gson.JsonParser.parseString(deliverableJson).getAsJsonObject();
+            if (!deliverable.has("issues") || !deliverable.get("issues").isJsonArray()) {
+                return DeliverableContract.CitationOutcome.pass(); // 结构校验已拦过——防御位
+            }
+            int total = 0;
+            int valid = 0;
+            java.util.List<String> violations = new java.util.ArrayList<>();
+            for (var issueElement : deliverable.get("issues").getAsJsonArray()) {
+                if (issueElement == null || !issueElement.isJsonObject()) {
+                    continue;
+                }
+                var issue = issueElement.getAsJsonObject();
+                String severity = issue.has("severity") ? issue.get("severity").getAsString() : "";
+                String evidenceId = issue.has("evidenceId") && !issue.get("evidenceId").isJsonNull()
+                        ? issue.get("evidenceId").getAsString() : null;
+                String evidence = issue.has("evidence") && !issue.get("evidence").isJsonNull()
+                        ? issue.get("evidence").getAsString() : null;
+                boolean high = "HIGH".equalsIgnoreCase(severity);
+                if (evidenceId == null || evidenceId.isBlank()) {
+                    if (high) {
+                        violations.add("HIGH 问题缺少 evidenceId（severity=" + severity + "）");
+                    }
+                    continue; // 未绑定：非 HIGH 不强制，无账可落
+                }
+                total++;
+                long[] parts = EvidenceCodec.parse(evidenceId);
+                if (parts == null) {
+                    violations.add("evidenceId 格式非法: " + evidenceId);
+                    recordCitation(runId, nodeId, stepNo, evidence, evidenceId, -1, -1, false, "格式非法");
+                    continue;
+                }
+                NovelToolReceipt receipt = loadReceiptQuietly(parts[0]);
+                EvidenceCodec.EvidenceCheck check = EvidenceCodec.verify(evidenceId, evidence, receipt);
+                recordCitation(runId, nodeId, stepNo, evidence, evidenceId,
+                        parts[0], (int) parts[1], check.ok(), check.violations());
+                if (check.ok()) {
+                    valid++;
+                } else {
+                    violations.add(check.violations());
+                }
+            }
+            if (violations.isEmpty()) {
+                return new DeliverableContract.CitationOutcome(true, null, total, valid);
+            }
+            return new DeliverableContract.CitationOutcome(false, String.join("；", violations), total, valid);
+        } catch (Exception e) {
+            // 引文校验通道故障：降级为不通过（保守——不许因校验器故障放行假引文）
+            return new DeliverableContract.CitationOutcome(false, "引文校验通道故障: " + e.getMessage(), 0, 0);
+        }
+    }
+
+    private NovelToolReceipt loadReceiptQuietly(long receiptId) {
+        try {
+            return receiptService.getById(receiptId);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void recordCitation(Long runId, String nodeId, int stepNo, String claimText,
+                                String evidenceId, long receiptId, int itemIndex, boolean ok, String violations) {
+        try {
+            citationLinkService.record(runId, nodeId, stepNo, claimText,
+                    evidenceId, receiptId, Math.max(1, itemIndex), ok, violations);
+        } catch (Exception e) {
+            // 落账已在服务内静默容错——此处仅防意外类型错误
+        }
     }
 
     /** required 键存在性判定（Gson 宽松解析下区分"缺键"与"显式空值"） */
