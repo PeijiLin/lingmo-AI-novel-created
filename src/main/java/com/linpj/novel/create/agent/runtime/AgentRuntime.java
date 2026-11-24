@@ -93,10 +93,11 @@ public class AgentRuntime {
             return runLoop(task);
         } catch (Exception e) {
             // 未归档异常：转 DEGRADED（节点侧按各自语义消费）；L2 已烧 token 由账本如实记录
-            log.warn("AgentRuntime 未归档异常（转 DEGRADED）: run={}, node={}, error={}",
-                    task.runId(), task.nodeId(), e.getMessage());
+            log.warn("AgentRuntime 未归档异常（转 DEGRADED）: run={}, node={}",
+                    task.runId(), task.nodeId(), e);
             long spent = stepService.tokensUsed(task.runId(), task.nodeId());
-            return new AgentResult.Degraded("runtime-error: " + e.getMessage(), spent, 0);
+            return new AgentResult.Degraded("runtime-error: "
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()), spent, 0);
         }
     }
 

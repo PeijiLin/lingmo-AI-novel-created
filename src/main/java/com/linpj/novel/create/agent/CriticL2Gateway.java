@@ -70,8 +70,9 @@ public class CriticL2Gateway {
 
     /**
      * 生产装配：ChatClient 与 CriticAgent 同款异源路由 + CRITIC-L2 录制；
-     * 引文校验依赖回执账/引文账（R1b）。
+     * 引文校验依赖回执账/引文账（R1b）。多构造器场景显式标注注入点。
      */
+    @org.springframework.beans.factory.annotation.Autowired
     public CriticL2Gateway(ChatModel chatModel,
                            ModelCallLog modelCallLog,
                            AgentRuntime agentRuntime,

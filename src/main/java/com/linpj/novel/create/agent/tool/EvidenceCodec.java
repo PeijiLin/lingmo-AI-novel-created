@@ -137,26 +137,79 @@ public final class EvidenceCodec {
         return new EvidenceCheck(true, null);
     }
 
-    /** 文本一致性：引文与条目任一字段值归一化互含（宽松阈值——R1b 结构级，S 系实验再校准严格度） */
+    /**
+     * 文本一致性（冒烟校准后口径）：
+     * 条目递归展开到叶子字符串值（引用发生在字段值级，非对象级——fact 对象序列化
+     * 含 id/时间戳噪音，对象级互含会把合法引用全部误杀）；claim 与任一叶子归一化后
+     * 最长公共子串 ≥ EVIDENCE_LCS_THRESHOLD 即命中——容忍措辞改写（真实冒烟：模型
+     * 复合引文含"左臂中弹（第12章），恢复期，抬举困难"切片 ✓），拦截不相干幻觉
+     * （"右臂完全健康" vs "左臂中弹…" LCS≈1 ✗）。阈值待 S 系实验校准。
+     */
     private static boolean textMatches(String claimText, Map<String, Object> entry) {
         String normalizedClaim = normalize(claimText);
         if (normalizedClaim.isEmpty()) {
             return false;
         }
-        for (Object value : entry.values()) {
-            if (value == null || EVIDENCE_ID_FIELD.equals(value)) {
-                continue;
-            }
-            String normalizedValue = normalize(String.valueOf(value));
-            if (normalizedValue.isEmpty()) {
-                continue;
-            }
-            if (normalizedValue.contains(normalizedClaim) || normalizedClaim.contains(normalizedValue)) {
+        java.util.List<String> leaves = new java.util.ArrayList<>();
+        collectLeafValues(entry, leaves);
+        for (String leaf : leaves) {
+            String normalizedLeaf = normalize(leaf);
+            if (normalizedLeaf.length() >= 2 && longestCommonSubstring(normalizedClaim, normalizedLeaf)
+                    >= EVIDENCE_LCS_THRESHOLD) {
                 return true;
             }
         }
         return false;
     }
+
+    /** 递归收集叶子字符串值（嵌套 Map/List 下钻；evidenceId 字段跳过——指针本身不是内容） */
+    @SuppressWarnings("unchecked")
+    private static void collectLeafValues(Object value, java.util.List<String> leaves) {
+        if (value == null) {
+            return;
+        }
+        if (value instanceof Map<?, ?> map) {
+            for (var entry : map.entrySet()) {
+                if (EVIDENCE_ID_FIELD.equals(entry.getKey())) {
+                    continue;
+                }
+                collectLeafValues(entry.getValue(), leaves);
+            }
+        } else if (value instanceof List<?> list) {
+            for (Object item : list) {
+                collectLeafValues(item, leaves);
+            }
+        } else if (value instanceof Number || value instanceof Boolean) {
+            // 数字/布尔叶子含语义密度低，跳过（防 id/时间戳碎片误配）
+        } else {
+            leaves.add(String.valueOf(value));
+        }
+    }
+
+    /** 最长公共子串（动态规划；两串各 ≤ 数百字符，性能可忽略） */
+    private static int longestCommonSubstring(String a, String b) {
+        if (a.isEmpty() || b.isEmpty()) {
+            return 0;
+        }
+        int max = 0;
+        int[] prev = new int[b.length() + 1];
+        int[] curr = new int[b.length() + 1];
+        for (int i = 1; i <= a.length(); i++) {
+            for (int j = 1; j <= b.length(); j++) {
+                curr[j] = a.charAt(i - 1) == b.charAt(j - 1) ? prev[j - 1] + 1 : 0;
+                if (curr[j] > max) {
+                    max = curr[j];
+                }
+            }
+            int[] swap = prev;
+            prev = curr;
+            curr = swap;
+        }
+        return max;
+    }
+
+    /** 引文一致阈值（归一化后公共子串长度；4=中文关键词级下限——"左臂中弹"类改写引用容忍，"臂中弹"3 字幻觉拦截，S 系实验校准） */
+    static final int EVIDENCE_LCS_THRESHOLD = 4;
 
     private static String normalize(String text) {
         return text == null ? "" : text.replaceAll("\\s+", "").trim();

@@ -107,4 +107,29 @@ class EvidenceCodecTest {
         // 非结构化回执（无条目可回验）
         assertFalse(EvidenceCodec.verify("ev:55#1", "x", receipt(55L, "纯文本错误")).ok());
     }
+
+    @Test
+    void 嵌套条目与复合引文真实冒烟场景() {
+        // 真实冒烟暴露的形态：canon.query 回执条目是嵌套 fact 对象（含 id/时间戳噪音 + state 子对象），
+        // 模型 evidence 是复合引文（正文片段 + 正典切片）——判定必须下钻到叶子值级
+        String items = com.linpj.novel.create.utils.JsonUtil.toJson(List.of(
+                Map.of("fact", Map.of(
+                        "id", 1, "bookId", 10,
+                        "state", Map.of("伤势", "左臂中弹（第12章），恢复期，抬举困难",
+                                "身份", "退役侦察兵林岸")))));
+        NovelToolReceipt ok = receipt(13L, items);
+
+        // 冒烟真实 case：复合引文（正文引语 + 正典切片）→ 叶子级 LCS 命中
+        assertTrue(EvidenceCodec.verify("ev:13#1",
+                "正文：\"右臂抬起，枪口稳稳锁住集装箱的缺口。\"　正典切片：{\"伤势\":\"左臂中弹（第12章），恢复期，抬举困难\"}",
+                ok).ok(), "复合引文含正典切片语义 → 通过（叶子值级判定）");
+
+        // 措辞改写（关键词级重叠）→ 容忍
+        assertTrue(EvidenceCodec.verify("ev:13#1", "林岸左臂中弹尚未痊愈", ok).ok());
+
+        // 不相干幻觉（左右臂调包）→ 拦截
+        assertFalse(EvidenceCodec.verify("ev:13#1", "右臂中弹正在康复训练", ok).ok(),
+                "右臂 vs 左臂：LCS 低于关键词阈值 → 幻觉拦截");
+        assertFalse(EvidenceCodec.verify("ev:13#1", "右臂完全健康无伤", ok).ok());
+    }
 }

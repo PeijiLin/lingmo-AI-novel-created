@@ -126,14 +126,15 @@ public class AgentStepService extends ServiceImpl<NovelAgentStepMapper, NovelAge
                     .eq(NovelAgentStep::getNodeId, nodeId)
                     .orderByAsc(NovelAgentStep::getStepNo));
             // Java 侧双保险排序（与 NodeCheckpointService.succeededNodes 同防 SQL 条件失效）；
-            // stream 派生新列表而非原地 sort——回放/桩返回不可变列表时同样安全
+            // stream 派生新列表而非原地 sort——回放/桩返回不可变列表时同样安全；
+            // 收集为可变 ArrayList——调用方（AgentRuntime.runLoop）会在 history 上追加新完成步
             if (records == null) {
                 return List.of();
             }
             return records.stream()
                     .filter(r -> r != null && r.getStepNo() != null)
                     .sorted(Comparator.comparingInt(NovelAgentStep::getStepNo))
-                    .toList();
+                    .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
         } catch (Exception e) {
             log.warn("步骤列表查询失败（返回空，续跑按零已完步重做）: runId={}, node={}, error={}",
                     runId, nodeId, e.getMessage());
