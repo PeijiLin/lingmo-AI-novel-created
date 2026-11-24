@@ -1,6 +1,6 @@
-# 📚 小说创作平台 (Novel Creation Platform)
+# 📚 小说创作平台后端 (lingmo-server)
 
-一个基于 **Spring Boot 3 + AI** 的智能小说创作平台，集成大语言模型（LLM）辅助创作、RAG 知识库、角色卡片管理、书架系统等功能，为作者提供全方位的创作支持。
+`lingmo-server` 是 lingmo-AI-novel-created 单仓的后端模块，基于 **Spring Boot 3.4.5 + Java 17**，集成大语言模型（LLM）辅助创作、RAG 知识库、角色卡片管理、书架系统等功能，为作者提供全方位的创作支持。
 
 ## ✨ 功能特性
 
@@ -19,7 +19,7 @@
 
 | 分类 | 技术 |
 |------|------|
-| 后端框架 | Spring Boot 3.3.0 |
+| 后端框架 | Spring Boot 3.4.5 |
 | JDK | Java 17 |
 | ORM | MyBatis-Plus 3.5.14 |
 | 数据库 | PostgreSQL |
@@ -34,6 +34,8 @@
 | 工具库 | Hutool、Lombok、Gson |
 
 ## 📁 项目结构
+
+以下为 `lingmo-server` 内部结构：
 
 ```
 src/main/java/com/linpj/novel/create/
@@ -66,8 +68,8 @@ src/main/java/com/linpj/novel/create/
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/your-username/novel-creation-platform-v2.git
-cd novel-creation-platform-v2
+git clone https://github.com/your-username/lingmo-AI-novel-created.git
+cd lingmo-AI-novel-created/lingmo-server
 ```
 
 ### 2. 初始化数据库
@@ -81,6 +83,9 @@ psql -U postgres -d novel_knowledge_base -f sql/knowledge_base.psql
 
 # 导入角色卡片表
 psql -U postgres -d novel_system -f sql/character_cards.sql
+
+# 导入 v2 流水线 / 世界状态表
+psql -U postgres -d novel_system -f sql/multi_agent.sql
 ```
 
 ### 3. 修改配置
@@ -94,8 +99,8 @@ mvn spring-boot:run
 ```
 
 服务启动后访问：
-- API 地址：`http://localhost:8080/api`
-- Swagger 文档：`http://localhost:8080/api/doc.html`
+- API 地址：`http://localhost:8088/api`
+- Swagger 文档：`http://localhost:8088/api/doc.html`
 
 ## 📡 主要 API 接口
 
@@ -109,6 +114,8 @@ mvn spring-boot:run
 | 阅读 | `/reading` | 章节阅读 |
 | 知识库 | `/knowledge-base` | 知识库管理 |
 | 自定义知识库 | `/customize-knowledge` | 自定义知识库 |
+
+> 上表为模块前缀，实际路径以控制器映射和 `server.servlet.context-path=/api` 为准；部分控制器自带 `/api` 前缀，会形成双重前缀。
 
 ## 📄 许可证
 
