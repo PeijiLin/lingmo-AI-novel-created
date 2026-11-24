@@ -352,3 +352,29 @@ CREATE TABLE IF NOT EXISTS novel_tool_receipt (
     CONSTRAINT uk_tool_receipt UNIQUE (run_id, node_id, tool, args_hash, attempt)
 );
 CREATE INDEX IF NOT EXISTS idx_tool_receipt_run ON novel_tool_receipt(run_id);
+
+-- ---------------------------------------------------------------------------
+-- R1b 批次（2026-11-24）：引文协议——citation_link 引文绑定账本
+-- 方案 §11.1-M1：evidenceId 由工具回执生成（ev:<receipt_id>#<序号>），finish 引文只认 ID；
+-- 引文校验退化为确定性存在性校验（receipt 存在 + 序号界内 + 引文文本与回执条目一致）
+-- ---------------------------------------------------------------------------
+-- 引文绑定账本（Critic L2 收口硬校验逐条落账；校验通过与否都留痕——一物四用中的审计/回放面）
+-- - evidence_id = ev:<receipt_id>#<序号>（代码生成，模型 finish 时引用）
+-- - receipt_id + item_index 回指 novel_tool_receipt.result 第 index 条（可回验原文）
+-- - ok = 该条绑定是否通过硬校验（存在性+界内+文本一致）；violations 记具体失败原因
+-- - issue 每条一绑定（issue.evidenceId → 工具回执条目）；claims[] 完整协议 R2 随 proposal.emit 扩展
+CREATE TABLE IF NOT EXISTS novel_citation_link (
+    id           BIGSERIAL PRIMARY KEY,
+    run_id       BIGINT NOT NULL,
+    node_id      VARCHAR(60) NOT NULL,
+    step_no      INTEGER NOT NULL,
+    claim_text   TEXT,
+    evidence_id  VARCHAR(40) NOT NULL,
+    receipt_id   BIGINT NOT NULL,
+    item_index   INTEGER NOT NULL,
+    ok           BOOLEAN NOT NULL DEFAULT FALSE,
+    violations   VARCHAR(200),
+    created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_citation_link UNIQUE (run_id, node_id, step_no, evidence_id)
+);
+CREATE INDEX IF NOT EXISTS idx_citation_link_run ON novel_citation_link(run_id);

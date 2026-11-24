@@ -17,9 +17,11 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -32,6 +34,8 @@ class CriticL2GatewayTest {
     private AgentRuntime runtime;
     private CriticAgent criticAgent;
     private AutonomyProperties autonomy;
+    private com.linpj.novel.create.worldstate.ToolReceiptService receiptService;
+    private com.linpj.novel.create.worldstate.CitationLinkService citationLinkService;
 
     @BeforeEach
     void setUp() {
@@ -39,10 +43,12 @@ class CriticL2GatewayTest {
         criticAgent = mock(CriticAgent.class);
         autonomy = new AutonomyProperties();
         autonomy.setEnabled(true);
+        receiptService = mock(com.linpj.novel.create.worldstate.ToolReceiptService.class);
+        citationLinkService = mock(com.linpj.novel.create.worldstate.CitationLinkService.class);
     }
 
     private CriticL2Gateway gateway() {
-        return new CriticL2Gateway(null, runtime, autonomy, criticAgent);
+        return new CriticL2Gateway(null, runtime, autonomy, criticAgent, receiptService, citationLinkService);
     }
 
     private PipelineRequest request() {
@@ -124,7 +130,7 @@ class CriticL2GatewayTest {
 
     @Test
     void 契约校验结构级规则生效() {
-        DeliverableContract contract = CriticL2Gateway.reviewReportContract();
+        DeliverableContract contract = gateway().criticContract(7L, "CRITIC:1");
 
         // 合法报告通过
         String valid = """
@@ -138,5 +144,59 @@ class CriticL2GatewayTest {
         // issues 缺失拒绝
         assertTrue(contract.validate(
                 "{\"approved\":true,\"overallScore\":8,\"summary\":\"s\"}").violations() != null);
+    }
+
+    @Test
+    void 引文硬校验HIGH问题必绑且可回验() {
+        // 回执：receipt 55 存一条一致证据
+        com.linpj.novel.create.pojo.entity.NovelToolReceipt receipt =
+                new com.linpj.novel.create.pojo.entity.NovelToolReceipt();
+        receipt.setId(55L);
+        receipt.setResult(com.linpj.novel.create.utils.JsonUtil.toJson(
+                java.util.List.of(java.util.Map.of("text", "角色左臂在第12章受伤"))));
+        when(receiptService.getById(55L)).thenReturn(receipt);
+
+        DeliverableContract contract = gateway().criticContract(7L, "CRITIC:1");
+
+        // 合法引文：结构过 + 引文过
+        String cited = """
+                {"deliverable":{"approved":false,"overallScore":4,"summary":"矛盾","issues":[
+                  {"type":"TIMELINE","severity":"HIGH","evidence":"左臂在第12章受伤","evidenceId":"ev:55#1"}]}}""";
+        DeliverableContract.CitationOutcome ok = contract.verifyCitations(cited, 3);
+        assertTrue(ok.ok());
+        assertEquals(1, ok.total());
+        assertEquals(1, ok.valid());
+        // 校验即落账（ok 绑定留痕）
+        verify(citationLinkService).record(org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq("CRITIC:1"), org.mockito.ArgumentMatchers.eq(3),
+                org.mockito.ArgumentMatchers.contains("左臂"), org.mockito.ArgumentMatchers.eq("ev:55#1"),
+                org.mockito.ArgumentMatchers.eq(55L), org.mockito.ArgumentMatchers.eq(1),
+                org.mockito.ArgumentMatchers.eq(true), org.mockito.ArgumentMatchers.isNull());
+
+        // HIGH 缺 evidenceId → 不通过
+        String noId = """
+                {"deliverable":{"approved":false,"overallScore":4,"summary":"s","issues":[
+                  {"type":"TIMELINE","severity":"HIGH","evidence":"某事实"}]}}""";
+        assertFalse(contract.verifyCitations(noId, 3).ok(), "HIGH 问题必须绑引文");
+
+        // 幻觉引文（文本与回执不一致）→ 不通过 + 失败绑定落账
+        String hallucinated = """
+                {"deliverable":{"approved":false,"overallScore":4,"summary":"s","issues":[
+                  {"type":"TIMELINE","severity":"HIGH","evidence":"右臂完全健康","evidenceId":"ev:55#1"}]}}""";
+        DeliverableContract.CitationOutcome bad = contract.verifyCitations(hallucinated, 3);
+        assertFalse(bad.ok());
+        assertEquals(1, bad.total());
+        assertEquals(0, bad.valid(), "E5 引文有效率分子只计通过绑定");
+        verify(citationLinkService).record(org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq("CRITIC:1"), org.mockito.ArgumentMatchers.eq(3),
+                org.mockito.ArgumentMatchers.contains("右臂"), org.mockito.ArgumentMatchers.eq("ev:55#1"),
+                org.mockito.ArgumentMatchers.eq(55L), org.mockito.ArgumentMatchers.eq(1),
+                org.mockito.ArgumentMatchers.eq(false), org.mockito.ArgumentMatchers.contains("不一致"));
+
+        // MEDIUM 不绑引文不强制（宽松起步，S 系实验再收紧）
+        String mediumNoId = """
+                {"deliverable":{"approved":true,"overallScore":8,"summary":"s","issues":[
+                  {"type":"STYLE_DRIFT","severity":"MEDIUM","evidence":"文风微漂"}]}}""";
+        assertTrue(contract.verifyCitations(mediumNoId, 3).ok());
     }
 }

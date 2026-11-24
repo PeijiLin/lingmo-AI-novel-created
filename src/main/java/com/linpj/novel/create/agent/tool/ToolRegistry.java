@@ -125,15 +125,18 @@ public class ToolRegistry {
                     "拒绝执行：工具 " + toolName + " 不在白名单", false);
         }
 
-        // ---- 幂等重放：任意成功回执直接复用（不执行不计费） ----
+        // ---- 幂等重放：任意成功回执直接复用（不执行不计费）；
+        //      结构化回执重打 evidenceId（回执存原文，模型文本带 id——纯函数保序列一致） ----
         try {
             if (receiptService.hasSucceeded(context.runId(), context.nodeId(), toolName, argsHash)) {
                 NovelToolReceipt latest = receiptService.latest(
                         context.runId(), context.nodeId(), toolName, argsHash);
                 log.debug("工具回执幂等重放: run={}, tool={}, receipt={}",
                         context.runId(), toolName, latest == null ? null : latest.getId());
+                String replayText = latest == null ? "（回执缺失）"
+                        : EvidenceCodec.rewrap(latest.getId(), String.valueOf(latest.getResult()));
                 return new ToolExecution(latest == null ? null : latest.getId(), true,
-                        String.valueOf(latest.getResult()), false);
+                        replayText, false);
             }
         } catch (Exception e) {
             log.warn("幂等预检故障（按未执行处理，走真实执行）: tool={}, error={}", toolName, e.getMessage());
@@ -160,38 +163,45 @@ public class ToolRegistry {
             attempt = 0;
         }
 
-        // ---- 真实执行（超时硬上限；异常/超时落失败回执） ----
+        // ---- 真实执行（超时硬上限；异常/超时落失败回执）；
+        //      结构化条目：回执存原文 → 注入 evidenceId 喂模型（引文协议 R1b） ----
         AgentTool tool = tools.get(toolName);
         long startAt = System.currentTimeMillis();
-        String resultText;
+        Object rawResult;
         boolean ok = true;
         try {
-            resultText = timedExecute(tool, agentContext, argumentsJson);
-            if (resultText == null) {
-                resultText = "（空结果）";
+            rawResult = timedExecute(tool, agentContext, argumentsJson);
+            if (rawResult == null || (rawResult instanceof String s && s.isBlank())) {
+                rawResult = "（空结果）";
             }
         } catch (Exception e) {
             ok = false;
-            resultText = "工具执行失败：" + e.getMessage();
+            rawResult = "工具执行失败：" + e.getMessage();
             log.warn("工具执行失败（落失败回执）: run={}, tool={}, error={}",
                     context.runId(), toolName, e.getMessage());
         }
         long costMs = System.currentTimeMillis() - startAt;
+        String receiptPayload = rawResult instanceof List list
+                ? JsonUtil.toJson(list)
+                : String.valueOf(rawResult);
         Long receiptId = null;
         try {
             NovelToolReceipt receipt = receiptService.record(context.runId(), context.nodeId(),
-                    toolName, argsHash, attempt, resultText, ok, 0, costMs);
+                    toolName, argsHash, attempt, receiptPayload, ok, 0, costMs);
             receiptId = receipt == null ? null : receipt.getId();
         } catch (Exception e) {
             log.warn("回执落账失败（结果仍回喂模型，审计缺失由步账兜底）: tool={}, error={}",
                     toolName, e.getMessage());
         }
+        String resultText = rawResult instanceof List && receiptId != null
+                ? EvidenceCodec.wrap(receiptId, rawResult)
+                : receiptPayload;
         executionCounts.computeIfAbsent(toolName, k -> new AtomicInteger()).incrementAndGet();
         return new ToolExecution(receiptId, ok, resultText, true);
     }
 
     /** 执行并施加墙钟硬上限（守护线程实现：正典只读工具不应超时，超过即失败回执） */
-    private String timedExecute(AgentTool tool, AgentTool.AgentContext context, String argumentsJson)
+    private Object timedExecute(AgentTool tool, AgentTool.AgentContext context, String argumentsJson)
             throws Exception {
         var future = java.util.concurrent.CompletableFuture.supplyAsync(
                 () -> {

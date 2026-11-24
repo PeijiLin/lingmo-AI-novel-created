@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 正典查询工具（自主性改造 R1a：§12.8——worldstate 只读包装）
+ * 正典查询工具（自主性改造 R1a/R1b：§12.8——worldstate 只读包装）
  *
  * <p>模型通过 function calling 主动取证：角色当前态（solveLatest 帐）、事实切片
  * （solveState 按章号解算）、事件时间轴（timelineOf 全量限条）。
@@ -20,6 +20,9 @@ import java.util.Map;
  *
  * <p>参数契约（inputSchema）：type=CHARACTER|FACT|TIMELINE；CHARACTER/FACT 必传
  * characterId；FACT 可传 toChapter（缺省=最新态）；TIMELINE 可传 limit（缺省 20）。
+ *
+ * <p>引文协议（R1b）：返回结构化条目 List&lt;Map&gt;（每条一项证据）——Registry 注入
+ * evidenceId 后喂模型；错误提示仍为纯文本（错误不是证据，不参与引文）。
  *
  * @author HL
  */
@@ -60,8 +63,9 @@ public class CanonQueryTool implements AgentTool {
                 },"required":["type"]}""";
     }
 
+    /** 执行：证据型工具——返回结构化条目，由 Registry 注入 evidenceId（引文协议 R1b） */
     @Override
-    public String execute(AgentToolContext context, String argumentsJson) throws Exception {
+    public Object execute(AgentToolContext context, String argumentsJson) throws Exception {
         AgentTool.AgentContext ctx = context.toAgentContext();
         Map<String, Object> args = parseArgs(argumentsJson);
         String type = String.valueOf(args.getOrDefault("type", ""));
@@ -81,7 +85,7 @@ public class CanonQueryTool implements AgentTool {
                 if (fact == null) {
                     return "未查到角色状态：characterId=" + characterId;
                 }
-                return JsonUtil.toJson(fact);
+                return List.of(Map.of("fact", fact));
             }
             case "TIMELINE" -> {
                 int limit = asInt(args.get("limit"), 20);
@@ -89,10 +93,10 @@ public class CanonQueryTool implements AgentTool {
                 if (timeline == null || timeline.isEmpty()) {
                     return "本书暂无事件时间轴记录";
                 }
-                List<NovelEventTimeline> limited = timeline.stream()
+                return timeline.stream()
                         .limit(Math.max(1, limit))
+                        .<Map<String, Object>>map(e -> Map.of("event", e))
                         .toList();
-                return JsonUtil.toJson(Map.of("count", limited.size(), "events", limited));
             }
             default -> {
                 return "查询失败：未知类型 " + type + "（支持 CHARACTER/FACT/TIMELINE）";

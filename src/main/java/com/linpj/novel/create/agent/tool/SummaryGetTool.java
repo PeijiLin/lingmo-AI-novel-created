@@ -47,8 +47,9 @@ public class SummaryGetTool implements AgentTool {
                 },"required":["level"]}""";
     }
 
+    /** 执行：证据型工具——返回结构化条目（R1b 引文协议） */
     @Override
-    public String execute(AgentToolContext context, String argumentsJson) throws Exception {
+    public Object execute(AgentToolContext context, String argumentsJson) throws Exception {
         AgentTool.AgentContext ctx = context.toAgentContext();
         Long bookId = ctx.bookId();
         if (bookId == null) {
@@ -61,7 +62,6 @@ public class SummaryGetTool implements AgentTool {
                 Integer from = asInteger(args.get("fromChapter"));
                 Integer to = asInteger(args.get("toChapter"));
                 if (from == null) {
-                    to = to == null ? null : to;
                     from = to == null ? 1 : Math.max(1, to - 9);
                 }
                 int end = to == null ? from + 9 : to;
@@ -69,14 +69,14 @@ public class SummaryGetTool implements AgentTool {
                 if (digests == null || digests.isEmpty()) {
                     return "章级摘要未生成（from=" + from + ",to=" + end + "）——可改查 SEGMENT 或 BOOK";
                 }
-                return JsonUtil.toJson(Map.of("level", "CHAPTER", "from", from, "to", end, "digests", digests));
+                return digests.stream().<Map<String, Object>>map(d -> Map.of("text", d)).toList();
             }
             case "SEGMENT" -> {
                 List<String> digests = summaryTreeService.loadSegmentDigests(bookId);
                 if (digests == null || digests.isEmpty()) {
                     return "分段摘要未生成——可改查 BOOK";
                 }
-                return JsonUtil.toJson(Map.of("level", "SEGMENT", "digests", digests));
+                return digests.stream().<Map<String, Object>>map(d -> Map.of("text", d)).toList();
             }
             case "BOOK" -> {
                 Long chapterId = ctx.chapterId();
@@ -86,7 +86,7 @@ public class SummaryGetTool implements AgentTool {
                 if (digest == null || digest.isBlank()) {
                     return "全书摘要未生成";
                 }
-                return JsonUtil.toJson(Map.of("level", "BOOK", "digest", digest));
+                return List.of(Map.of("digest", digest));
             }
             default -> {
                 return "查询失败：未知层级 " + level + "（支持 CHAPTER/SEGMENT/BOOK）";
