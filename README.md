@@ -5,6 +5,8 @@
 >
 > 中文名：灵墨小说创作平台 ｜ 英文名：LingMo Novel Creation Platform ｜ 简称：灵墨
 
+**在线介绍页**：https://peijilin.github.io/lingmo-AI-novel-created/
+
 灵墨是一个基于 **Spring Boot 3.4 + Spring AI** 的多智能体小说创作平台。它把「一次提示词续写」升级为可审计的编辑部流水线：**Planner 策划 → Writer 主笔 → 确定性规则 + Critic 审查 → 定向重写 → Polisher 润色**，并用 World State 正典账本保证跨章的人物、时间线、伏笔与设定一致性。
 
 ## ✨ 核心特性
@@ -130,6 +132,8 @@ novel-creation-platform-v2/
 │   ├── mapper/             # MyBatis XML
 │   └── statis/             # logback 日志配置
 ├── src/test/               # 单元测试与冒烟测试
+├── site/                   # GitHub Pages 项目介绍页（静态单页）
+├── .github/workflows/      # GitHub Actions（Pages 自动部署）
 ├── sql/
 │   ├── multi_agent.sql     # 多智能体累积 DDL（可重复执行）
 │   ├── knowledge_base.psql # 知识库 / 向量表
@@ -151,8 +155,8 @@ novel-creation-platform-v2/
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/PeijiLin/lingma-AI-novel-created.git
-cd lingma-AI-novel-created
+git clone https://github.com/PeijiLin/lingmo-AI-novel-created.git
+cd lingmo-AI-novel-created
 ```
 
 ### 2. 初始化数据库
