@@ -15,6 +15,7 @@ import DraftPaper from '@/components/base/DraftPaper.vue'
 import PipelinePanel from '@/components/base/PipelinePanel.vue'
 import VermilionNote from '@/components/base/VermilionNote.vue'
 import { useToast } from '@/composables/useToast'
+import { explainAiError } from '@/utils/aiError'
 import { useChapters } from '@/composables/useChapters'
 import { useAiCreation, type AiAction } from '@/composables/useAiCreation'
 import { getBookInfo, publishBook } from '@/api/books'
@@ -226,10 +227,13 @@ async function handleRun(act: AiAction) {
   const { request, anchorPos, label } = buildRequest(act)
   try {
     const noteId = await runWithNoteCapture(act, request, anchorPos, label)
-    if (act === '润色') polishRanges.set(noteId, { from: selection.from, to: selection.to })
-    if (act !== '润色') polishRanges.delete(noteId)
+    // 异步整章任务没有流式朱批卡（noteId 为 -1），不要把 -1 写进润色区间表
+    if (channel.value === 'sync') {
+      if (act === '润色') polishRanges.set(noteId, { from: selection.from, to: selection.to })
+      else polishRanges.delete(noteId)
+    }
   } catch (err) {
-    toast.error('AI 创作失败', err instanceof Error ? err.message : undefined)
+    toast.error('AI 创作失败', explainAiError(err) ?? (err instanceof Error ? err.message : undefined))
   }
 }
 

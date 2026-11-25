@@ -9,6 +9,7 @@ import { PenLine, Plus, Trash } from 'lucide-vue-next'
 import AppShell from '@/layouts/AppShell.vue'
 import { Button, Card, Dialog, Input, Skeleton, Textarea } from '@/components/ui'
 import { useToast } from '@/composables/useToast'
+import { explainAiError } from '@/utils/aiError'
 import {
   addKnowledgeBase,
   createCharacterCard,
@@ -147,7 +148,7 @@ async function ensureKb(): Promise<number | null> {
       return kbId.value
     }
     const created = await addKnowledgeBase({ bookId, name: '作品知识库', description: '' })
-    kbId.value = created.id ?? null
+    kbId.value = created || null
     return kbId.value
   } catch {
     return null
@@ -164,14 +165,14 @@ async function submitMaterial() {
   try {
     const id = await ensureKb()
     if (!id) {
-      toast.warning('知识库暂不可用（后端待补建库接口）')
+      toast.warning('知识库初始化失败，请稍后重试')
       return
     }
     await uploadKbContent(id, text)
     toast.success('素材已入库')
     material.value = ''
   } catch (err) {
-    toast.error('上传失败', err instanceof Error ? err.message : undefined)
+    toast.error('上传失败', explainAiError(err) ?? (err instanceof Error ? err.message : undefined))
   } finally {
     uploading.value = false
   }

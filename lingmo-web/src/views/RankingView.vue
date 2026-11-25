@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 排行榜（规范 4.2：按阅读量轻量榜单）
- * 后端榜单接口未就绪时，客户端拉取书目按 visitCount 降序兜底（规范 6）。
+ * 使用服务端 GET /book/ranking 按 visitCount 降序返回。
  */
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'

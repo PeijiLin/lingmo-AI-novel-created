@@ -24,8 +24,9 @@ export function pageKnowledgeBase(req: KnowledgeBasePageRequest): Promise<Page<K
 }
 
 /** 新增知识库 */
-export function addKnowledgeBase(dto: KnowledgeBaseDto): Promise<KnowledgeBaseVo> {
-  return http.post<KnowledgeBaseVo>('/knowledgeBase/add', dto)
+/** 新增知识库；后端直接返回新建 id（Long），不是 KnowledgeBaseVo */
+export function addKnowledgeBase(dto: KnowledgeBaseDto): Promise<number> {
+  return http.post<number>('/knowledgeBase/add', dto)
 }
 
 /** 删除知识库 */
