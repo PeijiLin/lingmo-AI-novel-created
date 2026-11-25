@@ -31,22 +31,26 @@ public final class EvidenceCodec {
     public static final String EVIDENCE_ID_FIELD = "evidenceId";
     static final String ID_PREFIX = "ev:";
 
+    /** 工具回喂数据的不可信标记（R3：数据面注入防线；与 AgentProtocol 同源） */
+    static final String UNTRUSTED_PREFIX = com.linpj.novel.create.agent.runtime.AgentProtocol.UNTRUSTED_PREFIX;
+
     private EvidenceCodec() {
     }
 
     /**
-     * 注入 evidenceId（喂模型文本）。
+     * 注入 evidenceId（喂模型文本；R3 起带不可信数据标记——数据面注入防线，
+     * 协议块配套条款禁止模型把工具数据当指令）。
      *
      * @param items 结构化条目（List&lt;Map&gt;；非 List 原样字符串化——透传）
-     * @return 带证据指针的 JSON 文本
+     * @return 带证据指针的 JSON 文本（[UNTRUSTED-DATA] 头）
      */
     public static String wrap(long receiptId, Object items) {
         List<Map<String, Object>> entries = asEntries(items);
         if (entries == null) {
-            return items == null ? "（空结果）" : String.valueOf(items);
+            return untrusted(items == null ? "（空结果）" : String.valueOf(items));
         }
         if (entries.isEmpty()) {
-            return JsonUtil.toJson(List.of());
+            return untrusted(JsonUtil.toJson(List.of()));
         }
         List<Map<String, Object>> wrapped = new ArrayList<>(entries.size());
         for (int i = 0; i < entries.size(); i++) {
@@ -55,27 +59,34 @@ public final class EvidenceCodec {
             entry.put(EVIDENCE_ID_FIELD, format(receiptId, i + 1));
             wrapped.add(entry);
         }
-        return JsonUtil.toJson(wrapped);
+        return untrusted(JsonUtil.toJson(wrapped));
     }
 
     /**
      * 重放重打 id（回执原文 → 模型历史文本）。
-     * 与 wrap 同一纯函数：非 JSON 数组原文原样返回（非证据回执不注入）。
+     * 与 wrap 同一纯函数（含不可信标记——首放/重放逐字节一致）；防御已带标记文本不双重包装。
      */
     public static String rewrap(long receiptId, String receiptResult) {
         if (receiptResult == null || receiptResult.isBlank()) {
-            return "（空结果）";
+            return untrusted("（空结果）");
+        }
+        if (receiptResult.startsWith(UNTRUSTED_PREFIX)) {
+            return receiptResult; // 已带标记（防御：重放不双重包装）
         }
         String trimmed = receiptResult.trim();
         if (!trimmed.startsWith("[")) {
-            return receiptResult; // 非结构化回执（纯文本/错误摘要）原样
+            return untrusted(receiptResult); // 非结构化回执（纯文本/错误摘要）同加标记回喂
         }
         try {
             List<?> raw = JsonUtil.fromJson(trimmed, List.class);
             return wrap(receiptId, raw);
         } catch (Exception e) {
-            return receiptResult; // 原文不可解析（防御）：原样，不阻断重放
+            return untrusted(receiptResult); // 原文不可解析（防御）：原样，不阻断重放
         }
+    }
+
+    private static String untrusted(String text) {
+        return UNTRUSTED_PREFIX + text;
     }
 
     /** evidenceId 格式：ev:<receiptId>#<序号>（序号从 1 起）；非法返回 null */

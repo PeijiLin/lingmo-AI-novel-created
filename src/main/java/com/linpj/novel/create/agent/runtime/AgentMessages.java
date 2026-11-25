@@ -80,8 +80,9 @@ public final class AgentMessages {
             case "TOOL_CALL" -> appendToolCallStep(messages, step, receiptLoader);
             case "TEXT" -> appendMalformedStep(messages, step);
             case "FINISH" -> appendFinishStep(messages, step);
+            case "ASK_HUMAN" -> appendAskHumanStep(messages, step);
             default -> {
-                // 未知类型（ASK_HUMAN 等 R1a 未启用）：防御跳过，不破坏既有序列
+                // 未知类型：防御跳过，不破坏既有序列
             }
         }
     }
@@ -149,6 +150,24 @@ public final class AgentMessages {
                 .build());
         messages.add(new UserMessage(AgentProtocol.repairHint(
                 decision.violations() == null ? "结构校验未通过" : decision.violations())));
+    }
+
+    /** ask_human 步重放（R3）：assistant(ask_human 调用) + 卡点应答（协议逐调用应答；
+     *  恢复重跑时应答为占位文本——真实答案以人工裁定材料注入是前端批的"带答案重跑"） */
+    private static void appendAskHumanStep(List<Message> messages, NovelAgentStep step) {
+        StepDecision decision = StepDecision.parse(step.getDecision());
+        if (decision == null || decision.finishArguments() == null) {
+            return;
+        }
+        String callId = decision.finishCallId() == null ? "call_ask_human" : decision.finishCallId();
+        messages.add(AssistantMessage.builder().content("").toolCalls(List.of(
+                new AssistantMessage.ToolCall(callId, "function",
+                        AgentProtocol.ASK_HUMAN_TOOL, decision.finishArguments())))
+                .build());
+        messages.add(ToolResponseMessage.builder().responses(List.of(
+                new ToolResponseMessage.ToolResponse(callId, AgentProtocol.ASK_HUMAN_TOOL,
+                        "已转入人审通道。请基于已有材料继续，或调用 agent_finish 收口。")))
+                .build());
     }
 
     /**

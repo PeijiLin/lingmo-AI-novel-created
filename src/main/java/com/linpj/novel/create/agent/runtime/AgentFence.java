@@ -18,8 +18,8 @@ import java.util.Set;
  *   <li>maxRepeatSignature：相邻步决策签名复读熔断。</li>
  * </ol>
  *
- * <p>allowAskHuman R1a 恒 false（协议就位、物理不注册——围栏先于自主性红线；
- * R3 跨天人审接入时放开）。
+ * <p>allowAskHuman R1a 恒 false（协议就位、物理不注册——围栏先于自主性红线）；
+ * R3 开放（withAskHuman 工厂）——跨天挂起/恢复待前端批，当下语义=转人审+安全网回 L1。
  *
  * @author HL
  */
@@ -28,10 +28,18 @@ public record AgentFence(int maxSteps, long tokenBudget, long wallClockMs,
                          int maxConsecutiveFailures, int maxRepeatSignature,
                          boolean allowAskHuman) {
 
-    /** 常规围栏工厂：白名单外的围栏维度取设计默认（连败 2 / 复读 3） */
+    /** 常规围栏工厂：白名单外的围栏维度取设计默认（连败 2 / 复读 3 / ask_human 不开） */
     public static AgentFence of(int maxSteps, long tokenBudget, long wallClockMs, Set<String> toolWhitelist) {
         return new AgentFence(maxSteps, tokenBudget, wallClockMs,
                 toolWhitelist == null ? Set.of() : Set.copyOf(toolWhitelist),
                 2, 3, false);
+    }
+
+    /** 允许人工卡点的围栏（R3：ask_human 元工具注册开放） */
+    public static AgentFence withAskHuman(int maxSteps, long tokenBudget, long wallClockMs,
+                                          Set<String> toolWhitelist) {
+        return new AgentFence(maxSteps, tokenBudget, wallClockMs,
+                toolWhitelist == null ? Set.of() : Set.copyOf(toolWhitelist),
+                2, 3, true);
     }
 }

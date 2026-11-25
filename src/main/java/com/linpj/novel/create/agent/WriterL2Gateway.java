@@ -70,6 +70,7 @@ public class WriterL2Gateway {
     private final WriterAgent writerAgent;
     private final ToolReceiptService receiptService;
     private final CitationLinkService citationLinkService;
+    private final com.linpj.novel.create.worldstate.PendingAssertionService pendingAssertionService;
 
     @Autowired
     public WriterL2Gateway(ChatModel chatModel,
@@ -78,28 +79,32 @@ public class WriterL2Gateway {
                            AutonomyProperties autonomyProperties,
                            WriterAgent writerAgent,
                            ToolReceiptService receiptService,
-                           CitationLinkService citationLinkService) {
+                           CitationLinkService citationLinkService,
+                           com.linpj.novel.create.worldstate.PendingAssertionService pendingAssertionService) {
         this.agentRuntime = agentRuntime;
         this.autonomyProperties = autonomyProperties;
         this.writerAgent = writerAgent;
         this.receiptService = receiptService;
         this.citationLinkService = citationLinkService;
+        this.pendingAssertionService = pendingAssertionService;
         // 主模型 + WRITER-L2 录制；不挂记忆/RAG（确定性 javadoc 语义）
         this.chatClient = ChatClient.builder(chatModel)
                 .defaultAdvisors(new ModelCallRecorder("WRITER-L2", modelCallLog))
                 .build();
     }
 
-    /** 测试装配：直传预制 ChatClient（回放桩） */
+    /** 测试装配：直传预制 ChatClient（回放桩）与人审账依赖 */
     WriterL2Gateway(ChatClient chatClient, AgentRuntime agentRuntime,
                     AutonomyProperties autonomyProperties, WriterAgent writerAgent,
-                    ToolReceiptService receiptService, CitationLinkService citationLinkService) {
+                    ToolReceiptService receiptService, CitationLinkService citationLinkService,
+                    com.linpj.novel.create.worldstate.PendingAssertionService pendingAssertionService) {
         this.chatClient = chatClient;
         this.agentRuntime = agentRuntime;
         this.autonomyProperties = autonomyProperties;
         this.writerAgent = writerAgent;
         this.receiptService = receiptService;
         this.citationLinkService = citationLinkService;
+        this.pendingAssertionService = pendingAssertionService;
     }
 
     /**
@@ -127,11 +132,12 @@ public class WriterL2Gateway {
                 emitter);
 
         AgentResult result = agentRuntime.run(task);
-        return consume(result, emitter);
+        return consume(request, runId, nodeId, result, emitter);
     }
 
-    /** L2 终态 → WriteResult 同构；Degraded/未知/交付缺失返回 null（分发处安全网回 L1） */
-    private WriterAgent.WriteResult consume(AgentResult result,
+    /** L2 终态 → WriteResult 同构；Degraded/WaitingHuman/未知/交付缺失返回 null（分发处安全网回 L1） */
+    private WriterAgent.WriteResult consume(PipelineRequest request, Long runId, String nodeId,
+                                            AgentResult result,
                                             com.linpj.novel.create.pipeline.ProgressEmitter emitter) {
         if (result instanceof AgentResult.Success success) {
             String text = extractText(success.deliverableJson());
@@ -155,6 +161,12 @@ public class WriterL2Gateway {
             log.warn("Writer L1 兜底返回异常（{}）——返 null 走分发处安全网", fallback.reason());
             return null;
         }
+        if (result instanceof AgentResult.WaitingHuman waiting) {
+            // R3：人工卡点——问题落待裁定账（人审通道，不丢）；返 null 走分发处安全网回 L1
+            log.warn("Writer L2 提出人审问题: {}", waiting.question());
+            recordAskHuman(request, runId, nodeId, waiting.question());
+            return null;
+        }
         if (result instanceof AgentResult.Degraded degraded) {
             // 契约型失败：不烧 L1 同材料（11.1-M1b）；返 null 由分发处安全网回 L1 重试链
             log.warn("Writer L2 契约型失败（返 null 走安全网）: {}", degraded.reason());
@@ -162,6 +174,18 @@ public class WriterL2Gateway {
         }
         log.warn("Writer L2 未知终态（返 null 走安全网）");
         return null;
+    }
+
+    /** 人审问题落待裁定账（R3：AGENT_ASK_HUMAN；静默容错——问题已在步账/日志留痕） */
+    private void recordAskHuman(PipelineRequest request, Long runId, String nodeId, String question) {
+        try {
+            pendingAssertionService.record(request.getBookId(), request.getChapterId(), null,
+                    "AGENT_ASK_HUMAN",
+                    java.util.Map.of("question", question == null ? "" : question,
+                            "node", nodeId == null ? "" : nodeId, "runId", runId == null ? -1 : runId));
+        } catch (Exception e) {
+            log.warn("人审问题落账失败: run={}, error={}", runId, e.getMessage());
+        }
     }
 
     private static java.util.function.Consumer<String> sinkOf(

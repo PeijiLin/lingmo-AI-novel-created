@@ -36,6 +36,7 @@ class CriticL2GatewayTest {
     private AutonomyProperties autonomy;
     private com.linpj.novel.create.worldstate.ToolReceiptService receiptService;
     private com.linpj.novel.create.worldstate.CitationLinkService citationLinkService;
+    private com.linpj.novel.create.worldstate.PendingAssertionService pendingAssertionService;
 
     @BeforeEach
     void setUp() {
@@ -45,10 +46,11 @@ class CriticL2GatewayTest {
         autonomy.setEnabled(true);
         receiptService = mock(com.linpj.novel.create.worldstate.ToolReceiptService.class);
         citationLinkService = mock(com.linpj.novel.create.worldstate.CitationLinkService.class);
+        pendingAssertionService = mock(com.linpj.novel.create.worldstate.PendingAssertionService.class);
     }
 
     private CriticL2Gateway gateway() {
-        return new CriticL2Gateway(null, runtime, autonomy, criticAgent, receiptService, citationLinkService);
+        return new CriticL2Gateway(null, runtime, autonomy, criticAgent, receiptService, citationLinkService, pendingAssertionService);
     }
 
     private PipelineRequest request() {

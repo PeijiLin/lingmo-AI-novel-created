@@ -47,6 +47,7 @@ class WriterL2GatewayTest {
     private AutonomyProperties autonomy;
     private ToolReceiptService receiptService;
     private CitationLinkService citationLinkService;
+    private com.linpj.novel.create.worldstate.PendingAssertionService pendingAssertionService;
 
     @BeforeEach
     void setUp() {
@@ -56,11 +57,12 @@ class WriterL2GatewayTest {
         autonomy.setEnabled(true);
         receiptService = mock(ToolReceiptService.class);
         citationLinkService = mock(CitationLinkService.class);
+        pendingAssertionService = mock(com.linpj.novel.create.worldstate.PendingAssertionService.class);
     }
 
     private WriterL2Gateway gateway() {
         return new WriterL2Gateway(null, runtime, autonomy, writerAgent,
-                receiptService, citationLinkService);
+                receiptService, citationLinkService, pendingAssertionService);
     }
 
     private PipelineRequest request() {

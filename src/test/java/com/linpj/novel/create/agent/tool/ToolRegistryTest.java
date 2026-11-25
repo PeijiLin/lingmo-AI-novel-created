@@ -193,7 +193,7 @@ class ToolRegistryTest {
 
         assertTrue(execution.ok());
         assertFalse(execution.executedNow(), "已有成功回执 → 重放，不执行");
-        assertEquals("stored-result", execution.resultText());
+        assertEquals("[UNTRUSTED-DATA] stored-result", execution.resultText());
         assertEquals(0, registry.executionCount("echo.tool"), "杀-恢复不重复执行（kill-resume 不变式 2）");
     }
 

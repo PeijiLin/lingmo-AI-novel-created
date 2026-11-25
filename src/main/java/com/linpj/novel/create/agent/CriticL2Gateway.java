@@ -67,6 +67,7 @@ public class CriticL2Gateway {
     private final CriticAgent criticAgent;
     private final ToolReceiptService receiptService;
     private final CitationLinkService citationLinkService;
+    private final com.linpj.novel.create.worldstate.PendingAssertionService pendingAssertionService;
 
     /**
      * 生产装配：ChatClient 与 CriticAgent 同款异源路由 + CRITIC-L2 录制；
@@ -80,6 +81,7 @@ public class CriticL2Gateway {
                            CriticAgent criticAgent,
                            ToolReceiptService receiptService,
                            CitationLinkService citationLinkService,
+                           com.linpj.novel.create.worldstate.PendingAssertionService pendingAssertionService,
                            PipelineCriticModelProperties criticModelProperties,
                            @Value("${spring.ai.openai.chat.api-key:}") String mainApiKey,
                            @Value("${spring.ai.openai.chat.base-url:}") String mainBaseUrl) {
@@ -88,22 +90,25 @@ public class CriticL2Gateway {
         this.criticAgent = criticAgent;
         this.receiptService = receiptService;
         this.citationLinkService = citationLinkService;
+        this.pendingAssertionService = pendingAssertionService;
         this.chatClient = ChatClient.builder(
                         CriticAgent.resolveCriticModel(chatModel, criticModelProperties, mainApiKey, mainBaseUrl))
                 .defaultAdvisors(new ModelCallRecorder("CRITIC-L2", modelCallLog))
                 .build();
     }
 
-    /** 测试装配：直传预制 ChatClient（回放桩）与引文账依赖 */
+    /** 测试装配：直传预制 ChatClient（回放桩）与引文账/人审账依赖 */
     CriticL2Gateway(ChatClient chatClient, AgentRuntime agentRuntime,
                     AutonomyProperties autonomyProperties, CriticAgent criticAgent,
-                    ToolReceiptService receiptService, CitationLinkService citationLinkService) {
+                    ToolReceiptService receiptService, CitationLinkService citationLinkService,
+                    com.linpj.novel.create.worldstate.PendingAssertionService pendingAssertionService) {
         this.chatClient = chatClient;
         this.agentRuntime = agentRuntime;
         this.autonomyProperties = autonomyProperties;
         this.criticAgent = criticAgent;
         this.receiptService = receiptService;
         this.citationLinkService = citationLinkService;
+        this.pendingAssertionService = pendingAssertionService;
     }
 
     /**
@@ -120,8 +125,11 @@ public class CriticL2Gateway {
         long tokenBudget = Math.max(0, setting.getTokenBudget());
 
         AgentTask task = new AgentTask(runId, criticNodeId,
-                AgentFence.of(maxSteps, tokenBudget, CRITIC_L2_WALL_CLOCK_MS,
-                        Set.of(CanonQueryTool.NAME, SummaryGetTool.NAME)),
+                setting.isAllowAskHuman()
+                        ? AgentFence.withAskHuman(maxSteps, tokenBudget, CRITIC_L2_WALL_CLOCK_MS,
+                                Set.of(CanonQueryTool.NAME, SummaryGetTool.NAME))
+                        : AgentFence.of(maxSteps, tokenBudget, CRITIC_L2_WALL_CLOCK_MS,
+                                Set.of(CanonQueryTool.NAME, SummaryGetTool.NAME)),
                 systemPrompt(), taskPrompt(context), chatClient,
                 criticContract(runId, criticNodeId),
                 // 预算型降级：L1 现状调用（同源 CriticContext；L2 工具成果不注入——消融基线隔离）
@@ -130,11 +138,12 @@ public class CriticL2Gateway {
                 emitter);
 
         AgentResult result = agentRuntime.run(task);
-        return consume(request, result);
+        return consume(request, runId, criticNodeId, result);
     }
 
     /** L2 终态 → 编排器同款消费语义 */
-    private CriticAgent.ReviewResult consume(PipelineRequest request, AgentResult result) {
+    private CriticAgent.ReviewResult consume(PipelineRequest request, Long runId,
+                                             String criticNodeId, AgentResult result) {
         if (result instanceof AgentResult.Success success) {
             ReviewReport report = parseReport(success.deliverableJson());
             if (report != null) {
@@ -154,6 +163,13 @@ public class CriticL2Gateway {
             return new CriticAgent.ReviewResult(passReport(
                     "L1 兜底返回异常（" + fallback.reason() + "），按通过处理"), fallback.l2TokensSpent());
         }
+        if (result instanceof AgentResult.WaitingHuman waiting) {
+            // R3：人工卡点——问题落待裁定账（人审通道，不丢）；本轮按 Critic 降级语义出报告（跨天挂起/带答案重跑待前端批）
+            log.warn("Critic L2 提出人审问题: {}", waiting.question());
+            recordAskHuman(request, criticNodeId, runId, waiting.question());
+            return new CriticAgent.ReviewResult(passReport(
+                    "L2 提出人审问题（已转人审）: " + waiting.question()), waiting.tokensSpent());
+        }
         if (result instanceof AgentResult.Degraded degraded) {
             // 契约型失败：与现有 Critic 故障降级同款（宁可放过不可改错）
             log.warn("Critic L2 契约型失败（转人审语义报告）: {}", degraded.reason());
@@ -162,6 +178,18 @@ public class CriticL2Gateway {
                     degraded.tokensSpent());
         }
         return new CriticAgent.ReviewResult(passReport("L2 未知终态，按通过处理"), 0);
+    }
+
+    /** 人审问题落待裁定账（R3：AGENT_ASK_HUMAN 类型——人审通道，问题不丢；静默容错） */
+    private void recordAskHuman(PipelineRequest request, String nodeId, Long runId, String question) {
+        try {
+            pendingAssertionService.record(request.getBookId(), request.getChapterId(), null,
+                    "AGENT_ASK_HUMAN",
+                    java.util.Map.of("question", question == null ? "" : question,
+                            "node", nodeId == null ? "" : nodeId, "runId", runId == null ? -1 : runId));
+        } catch (Exception e) {
+            log.warn("人审问题落账失败（问题已在步账/日志留痕）: run={}, error={}", runId, e.getMessage());
+        }
     }
 
     // ------------------------------------------------------------------
