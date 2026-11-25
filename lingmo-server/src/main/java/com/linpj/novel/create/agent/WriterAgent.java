@@ -115,7 +115,9 @@ public class WriterAgent {
         if (context.getBookId() != null) {
             RetrievalAugmentationAdvisor ragAdvisor =
                     ragAdvisorFactory.forBook(context.getBookId(), context.getRagTopLimit());
-            spec.advisors(ragAdvisor);
+            if (ragAdvisor != null) {
+                spec.advisors(ragAdvisor);
+            }
         }
 
         spec.stream()

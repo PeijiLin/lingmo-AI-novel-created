@@ -6,6 +6,7 @@ import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
 import org.springframework.ai.rag.retrieval.search.VectorStoreDocumentRetriever;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.stream.Collectors;
@@ -27,6 +28,10 @@ public class RagAdvisorFactory {
 
     private final PgVectorStore vectorStore;
 
+    /** 本地无 Embedding Key 时可关闭 RAG 检索，避免每次对话都调 embedding 失败（默认开启） */
+    @Value("${novel.pipeline.rag.enabled:true}")
+    private boolean ragEnabled;
+
     public RagAdvisorFactory(PgVectorStore vectorStore) {
         this.vectorStore = vectorStore;
     }
@@ -44,6 +49,9 @@ public class RagAdvisorFactory {
      * @param topK 召回数上限（null = 检索器默认值，行为与单参重载完全一致）
      */
     public RetrievalAugmentationAdvisor forBook(Long bookId, Integer topK) {
+        if (!ragEnabled) {
+            return null;
+        }
         VectorStoreDocumentRetriever.Builder builder = VectorStoreDocumentRetriever.builder()
                 .vectorStore(vectorStore)
                 .filterExpression(() -> new Filter.Expression(

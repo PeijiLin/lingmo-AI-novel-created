@@ -107,7 +107,9 @@ public class CriticAgent {
                 .user(userPrompt);
         if (context.getBookId() != null) {
             RetrievalAugmentationAdvisor ragAdvisor = ragAdvisorFactory.forBook(context.getBookId());
-            spec.advisors(ragAdvisor);
+            if (ragAdvisor != null) {
+                spec.advisors(ragAdvisor);
+            }
         }
 
         ChatResponse response = Objects.requireNonNull(
