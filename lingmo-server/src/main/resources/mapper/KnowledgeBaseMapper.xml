@@ -10,14 +10,14 @@
             <result property="userId" column="user_id" jdbcType="BIGINT"/>
             <result property="name" column="name" jdbcType="VARCHAR"/>
             <result property="description" column="description" jdbcType="VARCHAR"/>
-            <result property="documentIds" column="document_id" jdbcType="OTHER" typeHandler="com.linpj.novel.create.utils.JsonbTypeHandler"/>
+            <result property="documentIds" column="document_ids" jdbcType="OTHER" typeHandler="com.linpj.novel.create.utils.JsonbTypeHandler"/>
             <result property="createAt" column="create_at" jdbcType="TIMESTAMP"/>
             <result property="updateAt" column="update_at" jdbcType="TIMESTAMP"/>
     </resultMap>
 
     <sql id="Base_Column_List">
         id,book_id,user_id,
-        name,description,document_id,
+        name,description,document_ids,
         create_at,update_at
     </sql>
 </mapper>

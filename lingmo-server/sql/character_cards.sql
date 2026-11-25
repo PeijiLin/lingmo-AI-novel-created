@@ -62,7 +62,7 @@ VALUES (1978743650141601794, 12345, '林晓月', '一位拥有神秘力量的年
         "createdAt":"Feb 10, 2023, 10:20:00 PM", "updatedAt":"May 19, 2023, 12:45:00 AM"}, {"id" : 3, "bookId":12345,
         "fromCharacterId":1001, "toCharacterId":1004, "relationshipType":"盟友",
         "description":"与同为守护者后裔的李明远建立了信任关系", "createdAt":"Mar 5, 2023, 5:15:00 PM",
-        "updatedAt":"Jul 12, 2023, 7:20:00 PM"}]')
+        "updatedAt":"Jul 12, 2023, 7:20:00 PM"}]');
 
 CREATE TABLE conversation_message_blocks (
     id BIGSERIAL PRIMARY KEY,
@@ -74,5 +74,5 @@ CREATE TABLE conversation_message_blocks (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_message_blocks_conversation_id ON conversation_message_blocks(conversation_id);
+CREATE INDEX idx_message_blocks_book_id ON conversation_message_blocks(book_id);
 CREATE INDEX idx_message_blocks_created_at ON conversation_message_blocks(created_at);
