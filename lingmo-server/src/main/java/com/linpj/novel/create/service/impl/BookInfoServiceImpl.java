@@ -1,5 +1,6 @@
 package com.linpj.novel.create.service.impl;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -370,6 +371,14 @@ public class BookInfoServiceImpl extends ServiceImpl<BookInfoMapper, BookInfo>
                 request.getWorkDirection() != null ? request.getWorkDirection() : "all",
                 request.getPageNum(),
                 request.getPageSize());
+    }
+
+    @Override
+    public List<BookInfoListVo> listVoByIds(Collection<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        return listByIds(ids).stream().map(this::convertToVo).toList();
     }
 
     // 提取 VO 转换逻辑

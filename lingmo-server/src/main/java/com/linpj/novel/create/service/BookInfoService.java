@@ -7,6 +7,7 @@ import com.linpj.novel.create.pojo.dto.BookPageRequest;
 import com.linpj.novel.create.pojo.entity.BookInfo;
 import com.linpj.novel.create.pojo.vo.BookInfoListVo;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -47,4 +48,9 @@ public interface BookInfoService extends IService<BookInfo> {
      * @param limit 返回条数
      */
     List<BookInfoListVo> queryRanking(int limit);
+
+    /**
+     * 按 id 批量取书籍 VO（供书架等关联查询复用转换逻辑）
+     */
+    List<BookInfoListVo> listVoByIds(Collection<Long> ids);
 }

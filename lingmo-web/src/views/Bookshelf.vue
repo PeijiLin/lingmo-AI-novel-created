@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 我的书架（规范 4.2：藏书 + 阅读进度）
- * 后端暂无书架列表接口：以可读书目 + 本地阅读进度（novel_read_progress）呈现。
+ * 书目来自后端 GET /bookshelf/list；阅读进度仍叠加 localStorage（novel_read_progress）。
  */
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -10,7 +10,7 @@ import AppShell from '@/layouts/AppShell.vue'
 import { Button, Skeleton } from '@/components/ui'
 import BookScrollCard from '@/components/base/BookScrollCard.vue'
 import { useToast } from '@/composables/useToast'
-import { pageBooks } from '@/api/books'
+import { listShelfBooks } from '@/api/shelf'
 import type { BookInfoVo } from '@/api/types'
 
 const router = useRouter()
@@ -32,7 +32,7 @@ function loadProgress() {
 async function loadBooks() {
   loading.value = true
   try {
-    const page = await pageBooks({ pageNum: 1, pageSize: 24 })
+    const page = await listShelfBooks(1, 24)
     books.value = page.records ?? []
   } catch (err) {
     toast.error('书架加载失败', err instanceof Error ? err.message : undefined)

@@ -3,6 +3,8 @@ package com.linpj.novel.create.service;
 import com.linpj.novel.create.constant.BaseResponse;
 import com.linpj.novel.create.pojo.dto.BookShelfAddRequest;
 import com.linpj.novel.create.pojo.entity.UserBookshelf;
+import com.linpj.novel.create.pojo.vo.BookInfoListVo;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 
 /**
@@ -13,4 +15,7 @@ import com.baomidou.mybatisplus.extension.service.IService;
 public interface UserBookshelfService extends IService<UserBookshelf> {
 
     Long addBook(BookShelfAddRequest bookShelfAddRequest);
+
+    /** 当前用户书架分页列表（按最近加入优先） */
+    Page<BookInfoListVo> listShelfBooks(Long userId, long pageNum, long pageSize);
 }
