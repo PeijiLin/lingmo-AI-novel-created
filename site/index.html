@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>灵墨 · 多智能体长篇小说创作平台</title>
+<meta name="description" content="灵墨（LingMo）是一个基于 Spring Boot 3.4 + Spring AI 的多智能体小说创作平台：Planner 策划、Writer 主笔、规则与 Critic 审查、Polisher 润色，World State 正典账本保证跨章一致性。">
+<meta name="theme-color" content="#F4EFE3">
+<meta property="og:type" content="website">
+<meta property="og:title" content="灵墨 · 多智能体长篇小说创作平台">
+<meta property="og:description" content="把一次提示词续写，拆成一条可审计的编辑部流水线。">
+<meta property="og:url" content="https://peijilin.github.io/lingmo-AI-novel-created/">
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
+<style>
+  :root{
+    --paper:#F4EFE3;
+    --paper-2:#EDE6D6;
+    --paper-3:#E3D9C5;
+    --card:#FBF7EC;
+    --ink:#1A1713;
+    --ink-2:#4F493C;
+    --ink-3:#6B6253;
+    --rule:rgba(26,23,19,.14);
+    --rule-strong:rgba(26,23,19,.30);
+    --mineral:#2E5F63;
+    --mineral-2:#1D4347;
+    --vermilion:#A9362A;
+    --vermilion-2:#C05A4B;
+    --seal:#A52E23;
+    --serif:"Songti SC","STSong","Noto Serif CJK SC","Source Han Serif SC","SimSun",serif;
+    --sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Source Han Sans SC",sans-serif;
+    --kai:"Kaiti SC","KaiTi","STKaiti","Noto Serif CJK SC",serif;
+    --mono:"SFMono-Regular",ui-monospace,"Cascadia Mono",Consolas,"Liberation Mono",monospace;
+    --wrap:1200px;
+  }
+
+  *,*::before,*::after{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    color:var(--ink);
+    font-family:var(--sans);
+    font-size:16px;
+    line-height:1.85;
+    background-color:var(--paper);
+    background-image:
+      linear-gradient(rgba(26,23,19,.018) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(26,23,19,.018) 1px, transparent 1px);
+    background-size:100% 44px, 88px 100%;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+  }
+  body::before{
+    content:"";
+    position:fixed;
+    inset:0;
+    pointer-events:none;
+    z-index:0;
+    background:
+      radial-gradient(900px 520px at 78% 6%, rgba(255,252,244,.65), transparent 70%),
+      radial-gradient(700px 480px at 4% 34%, rgba(227,217,197,.45), transparent 72%);
+  }
+  a{color:inherit;text-decoration:none;text-underline-offset:4px}
+  a:hover{color:var(--vermilion)}
+  img,svg{display:block;max-width:100%}
+  ::selection{background:rgba(169,54,42,.18)}
+  :focus-visible{outline:2px solid var(--mineral);outline-offset:3px}
+  .skip{
+    position:absolute;left:16px;top:-60px;z-index:50;
+    background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:2px;
+    font-size:13px;transition:top .2s ease;
+  }
+  .skip:focus{top:12px;color:var(--paper)}
+  .wrap{width:min(var(--wrap), calc(100% - 48px));margin:0 auto;position:relative;z-index:1}
+
+  /* ---------- top bar ---------- */
+  .topbar{
+    position:sticky;top:0;z-index:40;
+    background:rgba(244,239,227,.86);
+    backdrop-filter:blur(12px);
+    border-bottom:1px solid var(--rule);
+  }
+  .topbar-inner{
+    display:flex;align-items:center;justify-content:space-between;gap:24px;
+    height:68px;
+  }
+  .brand{display:flex;align-items:center;gap:12px;min-width:0}
+  .brand-seal{
+    width:34px;height:34px;flex:none;
+    display:grid;place-items:center;
+    background:var(--seal);color:var(--paper);
+    font-family:var(--kai);font-size:19px;line-height:1;
+    border-radius:3px;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.22);
+    transform:rotate(-3deg);
+  }
+  .brand-name{font-family:var(--serif);font-size:20px;letter-spacing:.12em}
+  .brand-sub{font-family:var(--mono);font-size:10px;letter-spacing:.22em;color:var(--ink-3);text-transform:uppercase}
+  .topnav{display:flex;align-items:center;gap:26px}
+  .topnav a{
+    font-size:13px;letter-spacing:.06em;color:var(--ink-2);
+    padding:6px 0;border-bottom:1px solid transparent;
+  }
+  .topnav a:hover{color:var(--ink);border-bottom-color:var(--vermilion)}
+  .topnav a.is-current{color:var(--ink);border-bottom-color:var(--vermilion)}
+  .topbar-gh{
+    font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+    border:1px solid var(--rule-strong);padding:9px 14px;border-radius:2px;
+    transition:background .2s ease,color .2s ease,border-color .2s ease;
+  }
+  .topbar-gh:hover{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+
+  /* ---------- hero ---------- */
+  .hero{padding:clamp(56px,9vh,104px) 0 clamp(56px,8vh,88px)}
+  .hero-grid{
+    display:grid;
+    grid-template-columns:minmax(0,1.32fr) minmax(320px,.78fr);
+    column-gap:clamp(36px,6vw,80px);row-gap:34px;
+    align-items:center;
+  }
+  .eyebrow{
+    font-family:var(--mono);font-size:11px;letter-spacing:.2em;
+    color:var(--ink-3);text-transform:uppercase;
+    display:flex;align-items:center;gap:14px;margin:0 0 26px;
+  }
+  .eyebrow::before{content:"";width:28px;height:1px;background:var(--vermilion);flex:none}
+  .hero h1{
+    font-family:var(--serif);
+    font-size:clamp(88px,13vw,168px);
+    line-height:.84;
+    letter-spacing:.04em;
+    margin:0 0 22px;
+    font-weight:600;
+  }
+  .hero-sub{
+    font-family:var(--serif);font-size:clamp(19px,2vw,26px);
+    letter-spacing:.16em;margin:0 0 26px;color:var(--ink-2);font-weight:500;
+  }
+  .hero-lead{
+    max-width:34em;margin:0 0 20px;
+    font-size:16.5px;line-height:1.9;color:var(--ink-2);
+  }
+  .hero-quote{
+    font-family:var(--kai);font-size:17px;color:var(--vermilion);
+    margin:0 0 34px;letter-spacing:.04em;
+  }
+  .hero-actions{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:46px}
+  .btn{
+    display:inline-flex;align-items:center;gap:10px;
+    padding:13px 22px;border:1px solid var(--ink);
+    background:var(--ink);color:var(--paper);
+    font-size:13.5px;letter-spacing:.1em;border-radius:2px;
+    transition:background .2s ease,border-color .2s ease,color .2s ease;
+  }
+  .btn .arr{font-family:var(--mono);font-size:12px}
+  .btn:hover{background:var(--vermilion);border-color:var(--vermilion);color:var(--paper)}
+  .btn-ghost{background:transparent;color:var(--ink)}
+  .btn-ghost:hover{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+  .hero-stats{
+    grid-column:1 / -1;
+    display:grid;grid-template-columns:repeat(4,1fr);gap:18px;
+    border-top:1px solid rgba(26,23,19,.28);padding-top:22px;margin:8px 0 0;
+  }
+  .stat{display:flex;flex-direction:column;gap:4px}
+  .stat b{font-family:var(--serif);font-size:clamp(22px,2.6vw,30px);font-weight:600;line-height:1.1}
+  .stat b .u{font-family:var(--sans);font-size:.46em;font-weight:400;letter-spacing:.08em;margin-left:.22em;color:var(--ink)}
+  .stat span{font-size:11.5px;letter-spacing:.14em;color:var(--ink-3)}
+
+  /* ---------- manuscript card (signature) ---------- */
+  .manuscript{
+    position:relative;
+    background:var(--card);
+    border:1px solid var(--rule-strong);
+    box-shadow:0 28px 64px rgba(26,23,19,.12), 0 2px 0 rgba(255,255,255,.6) inset;
+    transform:none;
+    padding:24px 24px 20px 30px;
+    border-radius:2px;
+  }
+  .manuscript::before{
+    content:"";position:absolute;left:14px;top:0;bottom:0;width:1px;
+    background:rgba(169,54,42,.28);
+  }
+  .manuscript-head{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--ink-3);
+    border-bottom:1px solid var(--rule);padding-bottom:12px;margin-bottom:16px;
+  }
+  .manuscript-head .state{color:var(--vermilion);display:flex;align-items:center;gap:6px}
+  .manuscript-head .state::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--vermilion)}
+  .ms-line{font-family:var(--serif);font-size:15px;line-height:2;margin:0 0 4px;color:var(--ink)}
+  .hit{
+    text-decoration:underline wavy var(--vermilion);
+    text-decoration-thickness:1.5px;text-underline-offset:5px;
+  }
+  .ms-note{
+    font-family:var(--kai);font-size:13px;font-weight:500;line-height:1.7;color:#8E2A1F;
+    border-left:2px solid var(--vermilion);
+    padding:1px 0 1px 10px;margin:6px 0 18px 16px;
+  }
+  .ms-tags{display:flex;flex-wrap:wrap;gap:8px;border-top:1px solid var(--rule);padding-top:14px}
+  .ms-tag{
+    font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+    color:var(--mineral-2);border:1px solid rgba(29,67,71,.35);
+    padding:3px 7px;border-radius:2px;background:rgba(46,95,99,.04);
+  }
+  .stamp{
+    position:absolute;top:-16px;right:-14px;
+    width:44px;height:44px;display:grid;place-items:center;
+    background:var(--seal);color:var(--paper);
+    font-family:var(--kai);font-size:20px;line-height:1;
+    border-radius:4px;transform:rotate(7deg);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.25), 0 8px 20px rgba(165,46,35,.25);
+  }
+
+  /* ---------- sections ---------- */
+  .section{padding:clamp(64px,9vh,104px) 0;border-top:1px solid var(--rule)}
+  .section-grid{
+    display:grid;grid-template-columns:150px minmax(0,1fr);
+    gap:clamp(24px,4vw,56px);align-items:start;
+  }
+  .rail{position:sticky;top:96px;display:flex;flex-direction:column;gap:10px}
+  .rail-num{font-family:var(--serif);font-size:42px;line-height:1;color:var(--vermilion);font-weight:600}
+  .rail-label{
+    writing-mode:vertical-rl;font-size:12.5px;letter-spacing:.32em;color:var(--ink-3);
+    border-right:1px solid var(--rule);padding-right:10px;
+  }
+  .section-body{min-width:0}
+  .section-eyebrow{
+    font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--mineral);
+    margin:0 0 14px;text-transform:uppercase;
+  }
+  .section-title{
+    font-family:var(--serif);font-weight:600;
+    font-size:clamp(30px,4vw,48px);line-height:1.28;letter-spacing:.01em;
+    margin:0 0 20px;
+  }
+  .section-lead{max-width:38em;font-size:16px;line-height:1.9;color:var(--ink-2);margin:0 0 36px}
+  .muted{color:var(--ink-3)}
+  .mono{font-family:var(--mono)}
+
+  /* flow */
+  .flow{
+    display:grid;
+    grid-template-columns:1fr auto 1fr auto 1fr auto 1fr auto 1fr;
+    align-items:stretch;gap:0;margin:0 0 18px;
+  }
+  .station{padding:16px 4px 0;border-top:2px solid var(--ink);min-width:0}
+  .station-index{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--vermilion);display:block;margin-bottom:8px}
+  .station h3{font-family:var(--serif);font-size:20px;line-height:1.2;margin:0 0 4px;font-weight:600}
+  .station p{font-size:12.5px;line-height:1.7;color:var(--ink-2);margin:0}
+  .station em{font-family:var(--mono);font-style:normal;font-size:10.5px;color:var(--ink-3);display:block;margin-top:8px;letter-spacing:.04em}
+  .flow-arrow{
+    align-self:start;padding:26px 10px 0;font-family:var(--mono);
+    color:var(--ink-3);font-size:13px;
+  }
+  .loop-note{
+    border:1px dashed var(--rule-strong);
+    padding:12px 16px;font-size:13px;color:var(--ink-2);
+    display:flex;gap:10px;align-items:flex-start;
+  }
+  .loop-note .back{color:var(--vermilion);font-family:var(--mono);flex:none}
+
+  /* modes */
+  .modes{margin-top:44px;border-top:1px solid var(--rule)}
+  .modes-head{
+    display:flex;justify-content:space-between;align-items:baseline;
+    padding:16px 0 10px;font-family:var(--mono);font-size:10px;
+    letter-spacing:.18em;color:var(--ink-3);text-transform:uppercase;
+  }
+  .mode-row{
+    display:grid;grid-template-columns:92px minmax(0,1fr) 64px 168px;gap:16px;
+    align-items:baseline;padding:15px 6px;border-top:1px solid var(--rule);
+    transition:background .18s ease;
+  }
+  .mode-row:last-child{border-bottom:1px solid var(--rule)}
+  .mode-row:hover{background:rgba(237,230,214,.65)}
+  .mode-name{font-family:var(--serif);font-size:18px;letter-spacing:.08em}
+  .mode-desc{font-size:13.5px;color:var(--ink-2)}
+  .mode-cost{font-family:var(--mono);font-size:12px;color:var(--vermilion)}
+  .mode-use{font-size:12px;color:var(--ink-3);text-align:right}
+
+  /* world state */
+  .world-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.72fr);gap:clamp(28px,4vw,56px);align-items:start}
+  .facets{display:grid;grid-template-columns:1fr 1fr;gap:22px 30px;margin-top:6px}
+  .facet dt{font-size:13.5px;font-weight:600;letter-spacing:.04em;margin-bottom:4px}
+  .facet dd{margin:0;font-size:12.5px;line-height:1.75;color:var(--ink-3)}
+  .ledger{
+    background:var(--card);border:1px solid var(--rule-strong);
+    padding:18px 18px 10px;box-shadow:0 18px 40px rgba(26,23,19,.06);
+    position:relative;
+  }
+  .ledger-title{
+    font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--ink-3);
+    border-bottom:1px solid var(--rule);padding-bottom:10px;margin-bottom:6px;
+  }
+  .ledger-row{
+    display:grid;grid-template-columns:46px minmax(0,1fr) auto;gap:12px;
+    padding:12px 0;border-bottom:1px solid var(--rule);align-items:start;
+  }
+  .ledger-row:last-child{border-bottom:0}
+  .ledger-kind{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--vermilion);padding-top:2px}
+  .ledger-row p{margin:0;font-size:13.5px;line-height:1.6}
+  .ledger-row small{display:block;font-size:11px;color:var(--ink-3);margin-top:3px;line-height:1.6}
+  .badge{
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;
+    color:var(--mineral);border:1px solid rgba(46,95,99,.3);padding:2px 5px;border-radius:2px;margin-top:2px;
+  }
+  .margin-note{
+    font-family:var(--kai);font-size:14px;line-height:1.85;color:var(--vermilion);
+    border-left:2px solid var(--vermilion);padding-left:14px;margin:28px 0 0;
+  }
+
+  /* dark section */
+  .section--dark{
+    background:var(--ink);color:#EFE8D8;border-top:1px solid rgba(239,232,216,.16);border-bottom:1px solid rgba(239,232,216,.1);
+    background-image:radial-gradient(800px 400px at 84% 10%, rgba(46,95,99,.28), transparent 70%);
+  }
+  .section--dark .rail-label{color:rgba(239,232,216,.62);border-right-color:rgba(239,232,216,.18)}
+  .section--dark .section-eyebrow{color:#8FB3B0}
+  .section--dark .section-lead{color:rgba(239,232,216,.72)}
+  .section--dark .station{border-top-color:#EFE8D8}
+  .agent-grid{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:clamp(30px,5vw,64px);align-items:start}
+  .loop-steps{display:flex;align-items:center;gap:10px;margin:26px 0 22px;flex-wrap:wrap}
+  .loop-step{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
+    border:1px solid rgba(239,232,216,.3);padding:7px 11px;border-radius:2px;
+  }
+  .loop-step b{color:#8FB3B0;font-weight:400;margin-right:6px}
+  .loop-arrow{color:rgba(239,232,216,.4);font-family:var(--mono);font-size:12px}
+  .fence{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+  .fence span{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;
+    color:rgba(239,232,216,.86);border:1px solid rgba(239,232,216,.26);
+    padding:5px 9px;border-radius:2px;
+  }
+  .code-card{
+    background:#12100C;border:1px solid rgba(239,232,216,.16);
+    border-radius:2px;padding:18px 20px;overflow:auto;
+    box-shadow:0 24px 50px rgba(0,0,0,.35);
+  }
+  .code-head{
+    display:flex;justify-content:space-between;gap:12px;
+    font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+    color:rgba(239,232,216,.58);border-bottom:1px solid rgba(239,232,216,.16);
+    padding-bottom:10px;margin-bottom:14px;
+  }
+  .code-card pre{
+    margin:0;font-family:var(--mono);font-size:12.5px;line-height:1.95;
+    color:#D8D0BF;white-space:pre-wrap;word-break:break-word;
+  }
+  .code-card .k{color:#8FB3B0}
+  .code-card .v{color:#D9A08F}
+  .code-card .c{color:rgba(239,232,216,.52)}
+  .agent-note{font-size:13px;color:rgba(239,232,216,.72);margin-top:22px;line-height:1.9}
+
+  /* gates */
+  .gates{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(18px,2.4vw,32px);margin-top:8px}
+  .gate{border-top:2px solid var(--vermilion);padding-top:16px}
+  .gate-code{font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--vermilion)}
+  .gate h3{font-family:var(--serif);font-size:21px;margin:8px 0 8px;font-weight:600}
+  .gate p{font-size:13px;line-height:1.85;color:var(--ink-2);margin:0}
+  .gate-foot{
+    margin-top:28px;padding-top:16px;border-top:1px solid var(--rule);
+    font-size:13px;color:var(--ink-2);display:flex;gap:10px;align-items:baseline;
+  }
+  .gate-foot::before{content:"※";color:var(--vermilion);font-family:var(--serif)}
+
+  /* engineering cards */
+  .eng-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--rule);border:1px solid var(--rule);margin-top:8px}
+  .eng{background:var(--paper);padding:22px 22px 24px}
+  .eng-code{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--mineral)}
+  .eng h3{font-family:var(--serif);font-size:18px;margin:8px 0 6px;font-weight:600}
+  .eng p{font-size:12.5px;line-height:1.8;color:var(--ink-3);margin:0}
+
+  /* start */
+  .start-grid{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:clamp(30px,5vw,64px);align-items:start}
+  .steps{list-style:none;padding:0;margin:0;counter-reset:step}
+  .steps li{
+    display:grid;grid-template-columns:34px 1fr;gap:14px;
+    padding:16px 0;border-top:1px solid var(--rule);align-items:start;
+  }
+  .steps li:last-child{border-bottom:1px solid var(--rule)}
+  .steps .n{font-family:var(--serif);font-size:20px;color:var(--vermilion);line-height:1.4}
+  .steps h3{font-size:14px;margin:0 0 3px;font-weight:600}
+  .steps p{font-size:12.5px;color:var(--ink-3);margin:0;line-height:1.7}
+  .terminal{
+    background:#12100C;border:1px solid rgba(26,23,19,.5);border-radius:2px;
+    padding:18px 20px;box-shadow:0 24px 50px rgba(26,23,19,.18);
+  }
+  .terminal .code-head{color:rgba(239,232,216,.42);border-bottom-color:rgba(239,232,216,.12)}
+  .terminal pre{
+    margin:0;font-family:var(--mono);font-size:12.5px;line-height:2;
+    color:#D8D0BF;white-space:pre-wrap;word-break:break-word;
+  }
+  .terminal .prompt{color:#8FB3B0}
+  .terminal .cm{color:rgba(239,232,216,.4)}
+  .start-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+
+  /* footer */
+  .footer{border-top:1px solid var(--rule);padding:38px 0 56px}
+  .footer-inner{display:flex;justify-content:space-between;align-items:flex-start;gap:32px;flex-wrap:wrap}
+  .footer-brand{display:flex;gap:14px;align-items:center}
+  .footer-brand .brand-seal{width:40px;height:40px;font-size:22px}
+  .footer-brand p{margin:0;font-size:12px;color:var(--ink-3);line-height:1.7}
+  .footer-brand strong{display:block;font-family:var(--serif);font-size:17px;letter-spacing:.1em;color:var(--ink);font-weight:600}
+  .footer-links{display:flex;gap:24px;flex-wrap:wrap;font-size:12px;color:var(--ink-3)}
+  .footer-links a:hover{color:var(--vermilion)}
+  .footer-meta{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--ink-3);margin-top:8px}
+
+  /* reveal */
+  .reveal{opacity:0;transform:translateY(14px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+  .reveal.is-in{opacity:1;transform:none}
+  .hero-copy > *{animation:rise .8s cubic-bezier(.2,.7,.2,1) both}
+  .hero-copy > *:nth-child(2){animation-delay:.06s}
+  .hero-copy > *:nth-child(3){animation-delay:.12s}
+  .hero-copy > *:nth-child(4){animation-delay:.18s}
+  .hero-copy > *:nth-child(5){animation-delay:.24s}
+  .hero-copy > *:nth-child(6){animation-delay:.30s}
+  .hero-copy > *:nth-child(7){animation-delay:.36s}
+  .manuscript{animation:stampIn .9s cubic-bezier(.2,.7,.2,1) .35s both}
+  @keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+  @keyframes stampIn{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:none}}
+
+  @media (max-width: 1000px){
+    .section-grid{grid-template-columns:1fr}
+    .rail{position:static;flex-direction:row;align-items:center;gap:12px;margin-bottom:6px}
+    .rail-num{font-size:30px}
+    .rail-label{writing-mode:horizontal-tb;border-right:0;padding-right:0;letter-spacing:.3em}
+    .hero-grid{grid-template-columns:1fr;gap:44px}
+    .hero-copy{order:1}
+    .hero-stats{order:2}
+    .manuscript{order:3}
+    .manuscript{transform:none}
+    .manuscript{animation:none}
+    .world-grid,.agent-grid,.start-grid{grid-template-columns:1fr}
+    .modes-head{display:none}
+    .mode-row{grid-template-columns:80px minmax(0,1fr) 56px;gap:12px}
+    .mode-use{display:none}
+  }
+  @media (max-width: 760px){
+    .topnav{display:none}
+    .eyebrow{font-size:10px;letter-spacing:.12em;gap:10px}
+    .eyebrow::before{width:18px}
+    .hero h1{font-size:clamp(72px,24vw,110px)}
+    .hero-stats{grid-template-columns:1fr 1fr;gap:16px 20px}
+    .flow{grid-template-columns:1fr;gap:0}
+    .flow-arrow{display:none}
+    .station{padding:14px 0 18px;border-top:1px solid var(--rule)}
+    .station:first-child{border-top:2px solid var(--ink)}
+    .gates{grid-template-columns:1fr;gap:22px}
+    .eng-grid{grid-template-columns:1fr}
+    .facets{grid-template-columns:1fr}
+    .mode-row{grid-template-columns:72px minmax(0,1fr);gap:8px 12px}
+    .mode-cost{grid-column:2;justify-self:start;font-size:11px}
+    .footer-inner{flex-direction:column}
+    .hero{padding:40px 0 56px}
+    .hero h1{font-size:clamp(68px,21vw,92px);margin-bottom:16px}
+    .hero-sub{font-size:16px;letter-spacing:.12em;margin-bottom:18px}
+    .hero-lead{font-size:15px;line-height:1.8;margin-bottom:14px}
+    .hero-quote{font-size:14.5px;margin-bottom:22px}
+    .hero-actions{margin-bottom:28px}
+    .hero-stats{gap:12px 20px;padding-top:16px}
+  }
+  @media (prefers-reduced-motion: reduce){
+    html{scroll-behavior:auto}
+    .reveal{opacity:1;transform:none;transition:none}
+    .hero-copy > *,.manuscript{animation:none}
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <a class="brand" href="./" aria-label="灵墨首页">
+      <span class="brand-seal" aria-hidden="true">灵</span>
+      <span class="brand-name">灵墨</span>
+      <span class="brand-sub">LingMo</span>
+    </a>
+    <nav class="topnav" aria-label="页面导航">
+      <a href="#pipeline">流水线</a>
+      <a href="#worldstate">正典</a>
+      <a href="#agent">自主</a>
+      <a href="#safety">防线</a>
+      <a href="#engineering">工程</a>
+      <a href="#start">开始</a>
+    </nav>
+    <a class="topbar-gh" href="https://github.com/PeijiLin/lingmo-AI-novel-created" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow">Spring Boot 3.4 · Spring AI · PostgreSQL</p>
+        <h1>灵墨</h1>
+        <p class="hero-sub">多智能体长篇小说创作平台</p>
+        <p class="hero-lead">把「一次提示词续写」拆成一条可审计的编辑部流水线：策划、主笔、审查、润色各司其职。World State 记住每一章发生过的事，让第 40 章仍然记得第 7 章。</p>
+        <p class="hero-quote">「灵」取灵感，「墨」取笔墨。灵感落墨，执笔成书。</p>
+        <div class="hero-actions">
+          <a class="btn" href="https://github.com/PeijiLin/lingmo-AI-novel-created" target="_blank" rel="noopener">查看源码 <span class="arr">↗</span></a>
+          <a class="btn btn-ghost" href="https://github.com/PeijiLin/lingmo-AI-novel-created/blob/master/README.md" target="_blank" rel="noopener">阅读 README</a>
+        </div>
+
+      </div>
+
+      <aside class="manuscript" aria-label="系统审阅批注示例">
+        <div class="stamp" aria-hidden="true">批</div>
+        <div class="manuscript-head">
+          <span>第 12 章 · 雨夜旧宅</span>
+          <span class="state">审阅中</span>
+        </div>
+        <p class="ms-line">林岸推开门，<span class="hit">右臂</span>的旧伤又疼了起来。</p>
+        <p class="ms-note">正典冲突：第 7 章记为左臂中弹。</p>
+        <p class="ms-line">他把信折好，塞进内袋，没有回头。</p>
+        <p class="ms-note">伏笔「无名信」已逾期 3 章，本章未推进。</p>
+        <p class="ms-line">沈砚没有回答，只是望向窗外的雨。</p>
+        <p class="ms-note">称谓与关系不符：当前关系应为「沈先生」。</p>
+        <div class="ms-tags">
+          <span class="ms-tag">RULE CHECKER</span>
+          <span class="ms-tag">CRITIC</span>
+          <span class="ms-tag">引文校验 ✓</span>
+        </div>
+      </aside>
+
+      <dl class="hero-stats">
+        <div class="stat"><b>4<span class="u">档</span></b><span>创作模式</span></div>
+        <div class="stat"><b>10+<span class="u">类</span></b><span>一致性规则</span></div>
+        <div class="stat"><b>5<span class="u">个</span></b><span>消融开关</span></div>
+        <div class="stat"><b>460+<span class="u">条</span></b><span>测试用例</span></div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="section" id="pipeline">
+    <div class="wrap section-grid">
+      <div class="rail" aria-hidden="true">
+        <span class="rail-num">壹</span>
+        <span class="rail-label">流水线</span>
+      </div>
+      <div class="section-body reveal">
+        <p class="section-eyebrow">Pipeline</p>
+        <h2 class="section-title">五个工位，一条能复盘的流水线</h2>
+        <p class="section-lead">节点之间是确定性工作流，节点内部才允许模型自主。每一阶段的产物都落库，中断可以续跑，重写有明确上限。</p>
+
+        <div class="flow">
+          <div class="station">
+            <span class="station-index">01</span>
+            <h3>Planner</h3>
+            <p>章节大纲、场景任务、伏笔的埋与收。</p>
+            <em>STRUCTURE</em>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="station">
+            <span class="station-index">02</span>
+            <h3>Writer</h3>
+            <p>按大纲写正文，只能提案，不能直改正典。</p>
+            <em>DRAFT</em>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="station">
+            <span class="station-index">03</span>
+            <h3>RuleChecker + Critic</h3>
+            <p>确定性规则与异源评审并行，逐条核对引文。</p>
+            <em>REVIEW</em>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="station">
+            <span class="station-index">04</span>
+            <h3>Polisher</h3>
+            <p>在不改动事实的前提下，修语言与节奏。</p>
+            <em>POLISH</em>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="station">
+            <span class="station-index">05</span>
+            <h3>提交门</h3>
+            <p>统一裁定正典提案，通过才允许入库。</p>
+            <em>COMMIT</em>
+          </div>
+        </div>
+
+        <p class="loop-note"><span class="back">↩</span><span>审查不通过时，带着问题清单回到 Writer 定向重写：默认 2 轮、硬上限 3 轮；预算耗尽则按 L1–L4 阶梯降级。</span></p>
+
+        <div class="modes">
+          <div class="modes-head"><span>Mode</span><span>Cost / Use</span></div>
+          <div class="mode-row">
+            <span class="mode-name">FAST</span>
+            <span class="mode-desc">Writer 单链路</span>
+            <span class="mode-cost">1×</span>
+            <span class="mode-use">灵感速记、快速试写</span>
+          </div>
+          <div class="mode-row">
+            <span class="mode-name">STANDARD</span>
+            <span class="mode-desc">Writer + Critic 闭环，含重写回路</span>
+            <span class="mode-cost">2–4×</span>
+            <span class="mode-use">日常创作默认档</span>
+          </div>
+          <div class="mode-row">
+            <span class="mode-name">REFINED</span>
+            <span class="mode-desc">Planner + Writer + Critic + Polisher</span>
+            <span class="mode-cost">5–8×</span>
+            <span class="mode-use">精修、定稿</span>
+          </div>
+          <div class="mode-row">
+            <span class="mode-name">PRECISE</span>
+            <span class="mode-desc">REFINED + 并行双稿择优</span>
+            <span class="mode-cost">8–12×</span>
+            <span class="mode-use">实验档、重要章节</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="worldstate">
+    <div class="wrap section-grid">
+      <div class="rail" aria-hidden="true">
+        <span class="rail-num">贰</span>
+        <span class="rail-label">正典</span>
+      </div>
+      <div class="section-body reveal">
+        <p class="section-eyebrow">World State</p>
+        <h2 class="section-title">先记住，再动笔</h2>
+        <p class="section-lead">长篇的难点不是写出一章，而是让几十章之后仍然自洽。World State 把人物、关系、事件、伏笔与设定写成可查询的账本，而不是塞进一段越来越长的提示词。</p>
+
+        <div class="world-grid">
+          <dl class="facets">
+            <div class="facet"><dt>三时间轴事实账本</dt><dd>按故事时间求解当前态，历史事实软失效、不物理删除。</dd></div>
+            <div class="facet"><dt>关系生效区间</dt><dd>谁与谁、在哪些章之间、是什么关系，都带区间。</dd></div>
+            <div class="facet"><dt>事件因果链</dt><dd>caused_by 连成链，时序倒错可以被确定性判定。</dd></div>
+            <div class="facet"><dt>伏笔排期</dt><dd>埋设与回收有章距，逾期会告警而不是静默遗忘。</dd></div>
+            <div class="facet"><dt>闭世界知情</dt><dd>knows 集合明确角色知道什么，不知道的事不能写成知道。</dd></div>
+            <div class="facet"><dt>定长摘要树</dt><dd>章 / 段 / 书三级摘要，上下文不随章节数线性膨胀。</dd></div>
+            <div class="facet"><dt>RAG 检索</dt><dd>按 bookId 过滤，召回相关历史片段作为写作与审查证据。</dd></div>
+            <div class="facet"><dt>断言与冲突</dt><dd>抽取结果分级入账，冲突进入人审队列而不是悄悄覆盖。</dd></div>
+          </dl>
+
+          <div class="ledger" aria-label="World State 账本示例">
+            <div class="ledger-title">WORLD STATE · 账本</div>
+            <div class="ledger-row">
+              <span class="ledger-kind">事实</span>
+              <div><p>林岸 · 左臂中弹</p><small>第 7 章写入 · 第 31 章仍有效</small></div>
+              <span class="badge">ACTIVE</span>
+            </div>
+            <div class="ledger-row">
+              <span class="ledger-kind">关系</span>
+              <div><p>沈砚 → 林岸 · 师徒</p><small>第 1–28 章生效 · 第 29 章起失效</small></div>
+              <span class="badge">RANGE</span>
+            </div>
+            <div class="ledger-row">
+              <span class="ledger-kind">伏笔</span>
+              <div><p>无名信 · 埋于第 9 章</p><small>计划第 18 章回收 · 当前逾期 3 章</small></div>
+              <span class="badge">OPEN</span>
+            </div>
+            <div class="ledger-row">
+              <span class="ledger-kind">知情</span>
+              <div><p>密道存在 · 林岸未知</p><small>knows 集合 · 第 12 章</small></div>
+              <span class="badge">CLOSED</span>
+            </div>
+          </div>
+        </div>
+
+        <p class="margin-note">不物理删除，只软失效 —— 倒叙、回忆和「他当时并不知道」才有据可查。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--dark" id="agent">
+    <div class="wrap section-grid">
+      <div class="rail" aria-hidden="true">
+        <span class="rail-num">叁</span>
+        <span class="rail-label">自主</span>
+      </div>
+      <div class="section-body reveal">
+        <p class="section-eyebrow">Bounded Autonomy</p>
+        <h2 class="section-title">有界自主，不是放任</h2>
+        <p class="section-lead">循环机制归代码，步骤决策归模型。每一步只允许三种出口：去取证、去问人、或者收口。围栏先于自主性上线，没有围栏就不开 L2。</p>
+
+        <div class="agent-grid">
+          <div>
+            <div class="loop-steps" aria-label="Agent 内循环">
+              <span class="loop-step"><b>01</b>THINK</span>
+              <span class="loop-arrow">→</span>
+              <span class="loop-step"><b>02</b>ACT</span>
+              <span class="loop-arrow">→</span>
+              <span class="loop-step"><b>03</b>OBSERVE</span>
+            </div>
+            <div class="fence" aria-label="围栏">
+              <span>步数上限</span>
+              <span>token 预算</span>
+              <span>墙钟</span>
+              <span>工具白名单</span>
+              <span>防复读熔断</span>
+              <span>无递归派生</span>
+            </div>
+            <p class="agent-note">失败或被拒的工具不推进状态；连续失败自动回退 L1 单次调用。ask_human 会挂起整个 run，可以跨天等一个答案。</p>
+          </div>
+          <div class="code-card">
+            <div class="code-head"><span>STEP PROTOCOL</span><span>每一步，三选一</span></div>
+<pre><span class="c">// 取证</span>
+{<span class="k">"type"</span>:<span class="v">"tool_call"</span>,<span class="k">"tool"</span>:<span class="v">"canon.query"</span>,
+ <span class="k">"args"</span>:{<span class="k">"subject"</span>:<span class="v">"林岸.左臂"</span>},<span class="k">"reason"</span>:<span class="v">"核对旧伤位置"</span>}
+
+<span class="c">// 问人（挂起，不占超时）</span>
+{<span class="k">"type"</span>:<span class="v">"ask_human"</span>,
+ <span class="k">"question"</span>:<span class="v">"密道入口是否已被主角发现？"</span>,<span class="k">"blocking"</span>:true}
+
+<span class="c">// 收口（必须过代码校验）</span>
+{<span class="k">"type"</span>:<span class="v">"finish"</span>,<span class="k">"deliverable"</span>:{...},
+ <span class="k">"claims"</span>:[{<span class="k">"text"</span>:<span class="v">"..."</span>,<span class="k">"evidence"</span>:[<span class="v">"ev://ch12/s3"</span>]}]}
+</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="safety">
+    <div class="wrap section-grid">
+      <div class="rail" aria-hidden="true">
+        <span class="rail-num">肆</span>
+        <span class="rail-label">防线</span>
+      </div>
+      <div class="section-body reveal">
+        <p class="section-eyebrow">Safety</p>
+        <h2 class="section-title">三道门，一道都不能少</h2>
+        <p class="section-lead">安全不是可调参数。三道门覆盖输入、生成过程与定稿，且不进入降级域 —— 即使预算触顶、Critic 被跳过，它们仍然在工作。</p>
+
+        <div class="gates">
+          <div class="gate">
+            <span class="gate-code">PRE</span>
+            <h3>输入前置</h3>
+            <p>纯代码、零成本、零延迟。拒绝物理上不可满足的约束与高置信提示注入；可疑表达标记放行，宁记不杀。</p>
+          </div>
+          <div class="gate">
+            <span class="gate-code">STREAM</span>
+            <h3>流式中置</h3>
+            <p>生成过程中持续扫描，命中即断流；截断后重新生成，不把风险内容交给前端。</p>
+          </div>
+          <div class="gate">
+            <span class="gate-code">POST</span>
+            <h3>定稿后置</h3>
+            <p>词表 gate 命中后先做修复式改写；仍然命中则转人审队列，并留下双指标审计记录。</p>
+          </div>
+        </div>
+
+        <p class="gate-foot">InputGuard → StreamGuard → FinalDraftGate，全过程写入安全审计账本；安全层不设开关。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="engineering">
+    <div class="wrap section-grid">
+      <div class="rail" aria-hidden="true">
+        <span class="rail-num">伍</span>
+        <span class="rail-label">工程</span>
+      </div>
+      <div class="section-body reveal">
+        <p class="section-eyebrow">Engineering</p>
+        <h2 class="section-title">让长跑可算、可停、可复现</h2>
+        <p class="section-lead">写一部长篇是长跑。成本要能算，失败要能停，实验要能重放 —— 这些不是附属功能，而是流水线的一部分。</p>
+
+        <div class="eng-grid">
+          <div class="eng">
+            <span class="eng-code">BUDGET</span>
+            <h3>预算三级链</h3>
+            <p>书级硬上限、章级 token / 时延 / 成本、轮级 40% 配额；超限产生降级决策而不是无限重试。</p>
+          </div>
+          <div class="eng">
+            <span class="eng-code">LADDER</span>
+            <h3>L1–L4 降级</h3>
+            <p>关 best-of → 收紧重写 → 跳过 Critic / Polisher → 停笔转人工。安全与硬校验始终保留。</p>
+          </div>
+          <div class="eng">
+            <span class="eng-code">CHECKPOINT</span>
+            <h3>节点断点续跑</h3>
+            <p>幂等键加输入指纹判定复用，中断后从首个未完成节点继续，已完成节点不重复计费。</p>
+          </div>
+          <div class="eng">
+            <span class="eng-code">LEDGER</span>
+            <h3>成本账本</h3>
+            <p>按 stage / Agent / model 计价，汇总查询与 CSV 导出，能对得上一章花了多少。</p>
+          </div>
+          <div class="eng">
+            <span class="eng-code">REPLAY</span>
+            <h3>录制与回放</h3>
+            <p>模型调用落盘 JSONL 并归档 MinIO；失败样本可以原样重放，实验不必重烧一遍。</p>
+          </div>
+          <div class="eng">
+            <span class="eng-code">ABLATION</span>
+            <h3>五个消融开关</h3>
+            <p>默认全关等于现状行为，支持请求级覆盖做同部署双跑，一次只开一个变量。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="start">
+    <div class="wrap section-grid">
+      <div class="rail" aria-hidden="true">
+        <span class="rail-num">陆</span>
+        <span class="rail-label">开始</span>
+      </div>
+      <div class="section-body reveal">
+        <p class="section-eyebrow">Get Started</p>
+        <h2 class="section-title">在自己的机器上跑起来</h2>
+        <p class="section-lead">需要 JDK 17、PostgreSQL 15+（pgvector）、Redis、Kafka 与 MinIO。模型走 OpenAI 兼容协议，密钥只放在本地配置里。</p>
+
+        <div class="start-grid">
+          <ol class="steps">
+            <li><span class="n">一</span><div><h3>克隆仓库</h3><p>前后端分仓，后端为当前仓库。</p></div></li>
+            <li><span class="n">二</span><div><h3>初始化数据库</h3><p>业务库与向量库分别建库，再执行累积 DDL。</p></div></li>
+            <li><span class="n">三</span><div><h3>写本地配置</h3><p>application-dev.yml 不入库，按 README 覆盖数据库与模型配置。</p></div></li>
+            <li><span class="n">四</span><div><h3>启动</h3><p>默认端口 8088，接口前缀 /api；Knife4j 文档在 /api/doc.html。</p></div></li>
+          </ol>
+
+          <div>
+            <div class="terminal">
+              <div class="code-head"><span>TERMINAL</span><span>3 commands</span></div>
+<pre><span class="prompt">$</span> git clone https://github.com/PeijiLin/lingmo-AI-novel-created.git
+
+<span class="cm"># 业务库：角色卡 + 多智能体累积 DDL</span>
+<span class="prompt">$</span> psql -U postgres -d novel_system -f sql/multi_agent.sql
+
+<span class="cm"># 启动（端口 8088，context-path /api）</span>
+<span class="prompt">$</span> mvn spring-boot:run</pre>
+            </div>
+            <div class="start-actions">
+              <a class="btn" href="https://github.com/PeijiLin/lingmo-AI-novel-created" target="_blank" rel="noopener">打开仓库 <span class="arr">↗</span></a>
+              <a class="btn btn-ghost" href="https://github.com/PeijiLin/lingmo-AI-novel-created/blob/master/README.md#-快速开始" target="_blank" rel="noopener">完整部署步骤</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <div class="footer-brand">
+      <span class="brand-seal" aria-hidden="true">墨</span>
+      <div>
+        <strong>灵墨 · LingMo</strong>
+        <p>多智能体长篇小说创作平台</p>
+      </div>
+    </div>
+    <div>
+      <div class="footer-links">
+        <a href="https://github.com/PeijiLin/lingmo-AI-novel-created" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/PeijiLin/lingmo-AI-novel-created/blob/master/README.md" target="_blank" rel="noopener">README</a>
+        <a href="https://github.com/PeijiLin/lingmo-AI-novel-created/issues" target="_blank" rel="noopener">Issues</a>
+      </div>
+      <div class="footer-meta">© 2026 灵墨 · 仅供学习参考使用</div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var nodes = document.querySelectorAll('.reveal');
+    if (!('IntersectionObserver' in window)) {
+      nodes.forEach(function (n) { n.classList.add('is-in'); });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-in');
+          io.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+    nodes.forEach(function (n) { io.observe(n); });
+  })();
+
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.topnav a[href^="#"]'));
+    if (!links.length || !('IntersectionObserver' in window)) return;
+    var map = {};
+    links.forEach(function (a) { map[a.getAttribute('href').slice(1)] = a; });
+    var sections = Object.keys(map).map(function (id) { return document.getElementById(id); }).filter(Boolean);
+    var spy = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        links.forEach(function (a) { a.classList.remove('is-current'); });
+        var current = map[entry.target.id];
+        if (current) current.classList.add('is-current');
+      });
+    }, { rootMargin: '-45% 0px -45% 0px', threshold: 0 });
+    sections.forEach(function (s) { spy.observe(s); });
+  })();
+</script>
+</body>
+</html>

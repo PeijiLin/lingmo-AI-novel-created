@@ -62,6 +62,7 @@ public class AgentRuntime {
     static final String KIND_TOOL_CALL = "TOOL_CALL";
     static final String KIND_TEXT = "TEXT";
     static final String KIND_FINISH = "FINISH";
+    static final String KIND_ASK_HUMAN = "ASK_HUMAN";
 
     private final AgentStepService stepService;
     private final ToolReceiptService receiptService;
@@ -194,6 +195,22 @@ public class AgentRuntime {
                     } else {
                         finishResult = outcome;
                     }
+                    break;
+                }
+                if (AgentProtocol.ASK_HUMAN_TOOL.equals(call.name()) && calls.size() == 1
+                        && task.fence().allowAskHuman()) {
+                    // ---- 单独 ask_human：人工卡点（R3：任务转人审，问题不丢） ----
+                    String question = AgentProtocol.extractQuestion(call.arguments());
+                    recordStep(task, stepNo, KIND_ASK_HUMAN,
+                            Map.of("question", question, "args", nvl(call.arguments(), "{}")),
+                            null, "DONE", stepTokens, "ask-human");
+                    if (task.emitter() != null) {
+                        task.emitter().emitAgent(AgentEvent.askHuman(
+                                task.runId(), task.nodeId(), stepNo, Map.of("question", question)));
+                    }
+                    log.info("ask_human 卡点（转人审）: run={}, node={}, step={}, question={}",
+                            task.runId(), task.nodeId(), stepNo, truncate(question, 80));
+                    finishResult = new AgentResult.WaitingHuman(question, tokensUsed);
                     break;
                 }
                 if (AgentProtocol.FINISH_TOOL.equals(call.name())) {
@@ -379,7 +396,7 @@ public class AgentRuntime {
         return step;
     }
 
-    /** 模型可见工具 = 白名单真实工具（Registry 描述注册）+ finish 元工具 */
+    /** 模型可见工具 = 白名单真实工具（Registry 描述注册）+ finish 元工具（+ ask_human，R3：围栏允许时） */
     List<ToolCallback> callbacksFor(AgentTask task) {
         Set<String> names = new LinkedHashSet<>();
         if (task.fence().toolWhitelist() != null) {
@@ -387,6 +404,9 @@ public class AgentRuntime {
         }
         List<ToolCallback> callbacks = new ArrayList<>(toolRegistry.callbacksFor(names));
         callbacks.add(AgentProtocol.finishCallback(task.contract()));
+        if (task.fence().allowAskHuman()) {
+            callbacks.add(AgentProtocol.askHumanCallback());
+        }
         return callbacks;
     }
 

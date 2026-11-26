@@ -172,6 +172,9 @@ public class AutonomyProperties {
         /** 内循环 token 预算（L1 恒 0；主约束维度——修正案纪律 1） */
         private long tokenBudget = 0;
 
+        /** 是否开放 ask_human 人工卡点（R3：默认 false——围栏先于自主性；yaml 按模式×节点开启） */
+        private boolean allowAskHuman = false;
+
         public int getLevel() {
             return level;
         }
@@ -196,11 +199,20 @@ public class AutonomyProperties {
             this.tokenBudget = tokenBudget;
         }
 
+        public boolean isAllowAskHuman() {
+            return allowAskHuman;
+        }
+
+        public void setAllowAskHuman(boolean allowAskHuman) {
+            this.allowAskHuman = allowAskHuman;
+        }
+
         NodeSetting copy() {
             NodeSetting copy = new NodeSetting();
             copy.level = this.level;
             copy.maxSteps = this.maxSteps;
             copy.tokenBudget = this.tokenBudget;
+            copy.allowAskHuman = this.allowAskHuman;
             return copy;
         }
     }

@@ -83,6 +83,28 @@ public class CanonProposalService extends ServiceImpl<NovelCanonProposalMapper, 
         }
     }
 
+    /**
+     * 提案裁定状态更新（R3 提交门：PENDING→ADOPTED/REJECTED，审计不可变只补记——
+     * 不覆盖已裁定状态，防重复消费二次改判）。
+     */
+    public boolean markResolved(Long proposalId, String status) {
+        if (proposalId == null || status == null) {
+            return false;
+        }
+        try {
+            NovelCanonProposal proposal = this.getById(proposalId);
+            if (proposal == null || !STATUS_PENDING.equals(proposal.getStatus())) {
+                return false; // 幂等：已裁定/不存在不重复改判
+            }
+            proposal.setStatus(status);
+            return this.updateById(proposal);
+        } catch (Exception e) {
+            log.warn("提案裁定更新失败（静默容错——提案保持 PENDING 待重试）: id={}, error={}",
+                    proposalId, e.getMessage());
+            return false;
+        }
+    }
+
     private boolean existsByHash(Long runId, String nodeId, String hash) {
         return this.count(new LambdaQueryWrapper<NovelCanonProposal>()
                 .eq(NovelCanonProposal::getRunId, runId)

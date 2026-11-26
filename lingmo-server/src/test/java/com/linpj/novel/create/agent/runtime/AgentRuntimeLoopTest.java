@@ -352,6 +352,43 @@ class AgentRuntimeLoopTest {
     }
 
     @Test
+    void askHuman人工卡点返回WaitingHuman并落账() {
+        // R3：allowAskHuman=true 时单独 ask_human 调用 → 步账(ASK_HUMAN/DONE) + WaitingHuman 终态
+        script(toolCall("ah1", AgentProtocol.ASK_HUMAN_TOOL,
+                "{\"question\":\"主角是否知道密道存在？\",\"blocking\":true}"));
+
+        AgentTask askTask = new AgentTask(7L, "CRITIC:1",
+                AgentFence.withAskHuman(8, 10_000, 60_000, Set.of("echo.tool")),
+                "system", "材料", chatClient, okContract(), null, null, null);
+
+        AgentResult result = new AgentRuntime(stepService, receiptService, registry).run(askTask);
+
+        assertInstanceOf(AgentResult.WaitingHuman.class, result);
+        assertEquals("主角是否知道密道存在？", ((AgentResult.WaitingHuman) result).question());
+        assertEquals(1, ledger.size());
+        assertEquals("ASK_HUMAN", ledger.get(0).getKind());
+        assertEquals("DONE", ledger.get(0).getStatus());
+    }
+
+    @Test
+    void askHuman围栏未开放时不可达() {
+        // allowAskHuman=false（默认围栏）：ask_human 未注册——模型不可能调用；
+        // 即便响应携带（防御位），也按未知工具拒绝（Registry 拒因回喂）
+        AssistantMessage ask = AssistantMessage.builder().content("").toolCalls(List.of(
+                new AssistantMessage.ToolCall("ah2", "function", AgentProtocol.ASK_HUMAN_TOOL,
+                        "{\"question\":\"x\"}")))
+                .build();
+        script(new ChatResponse(List.of(new Generation(ask))),
+                toolCall("c2", AgentProtocol.FINISH_TOOL, "{\"deliverable\":{\"approved\":true}}"));
+
+        AgentResult result = new AgentRuntime(stepService, receiptService, registry)
+                .run(task(fence(8), okContract(), null));
+
+        // ask_human 不在注册集 → Registry 拒绝回喂 → 模型下一步 finish 收口成功
+        assertInstanceOf(AgentResult.Success.class, result);
+    }
+
+    @Test
     void 步进提示从账本与围栏纯函数推导() {
         script(toolCall("c1", "echo.tool", "{}"),
                 toolCall("c2", AgentProtocol.FINISH_TOOL, "{\"deliverable\":{\"approved\":true}}"));

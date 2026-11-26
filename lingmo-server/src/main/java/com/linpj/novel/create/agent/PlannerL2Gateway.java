@@ -51,28 +51,33 @@ public class PlannerL2Gateway {
     private final AgentRuntime agentRuntime;
     private final AutonomyProperties autonomyProperties;
     private final PlannerAgent plannerAgent;
+    private final com.linpj.novel.create.worldstate.PendingAssertionService pendingAssertionService;
 
     @Autowired
     public PlannerL2Gateway(ChatModel chatModel,
                             ModelCallLog modelCallLog,
                             AgentRuntime agentRuntime,
                             AutonomyProperties autonomyProperties,
-                            PlannerAgent plannerAgent) {
+                            PlannerAgent plannerAgent,
+                            com.linpj.novel.create.worldstate.PendingAssertionService pendingAssertionService) {
         this.agentRuntime = agentRuntime;
         this.autonomyProperties = autonomyProperties;
         this.plannerAgent = plannerAgent;
+        this.pendingAssertionService = pendingAssertionService;
         this.chatClient = ChatClient.builder(chatModel)
                 .defaultAdvisors(new ModelCallRecorder("PLANNER-L2", modelCallLog))
                 .build();
     }
 
-    /** 测试装配：直传预制 ChatClient（回放桩） */
+    /** 测试装配：直传预制 ChatClient（回放桩）与人审账依赖 */
     PlannerL2Gateway(ChatClient chatClient, AgentRuntime agentRuntime,
-                     AutonomyProperties autonomyProperties, PlannerAgent plannerAgent) {
+                     AutonomyProperties autonomyProperties, PlannerAgent plannerAgent,
+                     com.linpj.novel.create.worldstate.PendingAssertionService pendingAssertionService) {
         this.chatClient = chatClient;
         this.agentRuntime = agentRuntime;
         this.autonomyProperties = autonomyProperties;
         this.plannerAgent = plannerAgent;
+        this.pendingAssertionService = pendingAssertionService;
     }
 
     /**

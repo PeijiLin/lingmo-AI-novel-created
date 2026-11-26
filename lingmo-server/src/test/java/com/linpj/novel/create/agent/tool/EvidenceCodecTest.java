@@ -47,12 +47,13 @@ class EvidenceCodecTest {
     }
 
     @Test
-    void 非结构化回执原样透传() {
-        assertEquals("工具执行失败：超时", EvidenceCodec.rewrap(9L, "工具执行失败：超时"));
-        assertEquals("拒绝执行：工具 foo 不在白名单",
+    void 非结构化回执带标记透传() {
+        // R3：所有工具回喂文本统一 [UNTRUSTED-DATA] 头（数据面注入防线——数据不是指令）
+        assertEquals("[UNTRUSTED-DATA] 工具执行失败：超时", EvidenceCodec.rewrap(9L, "工具执行失败：超时"));
+        assertEquals("[UNTRUSTED-DATA] 拒绝执行：工具 foo 不在白名单",
                 EvidenceCodec.rewrap(9L, "拒绝执行：工具 foo 不在白名单"));
         String wrappedPlain = EvidenceCodec.wrap(9L, "纯文本结果");
-        assertEquals("纯文本结果", wrappedPlain, "非 List 结果 wrap 透传（错误提示不是证据）");
+        assertEquals("[UNTRUSTED-DATA] 纯文本结果", wrappedPlain, "非 List 结果 wrap 同样带标记（错误提示也是外部数据）");
     }
 
     @Test

@@ -38,6 +38,7 @@ class PlannerL2GatewayTest {
     private AgentRuntime runtime;
     private PlannerAgent plannerAgent;
     private AutonomyProperties autonomy;
+    private com.linpj.novel.create.worldstate.PendingAssertionService pendingAssertionService;
 
     @BeforeEach
     void setUp() {
@@ -45,10 +46,11 @@ class PlannerL2GatewayTest {
         plannerAgent = mock(PlannerAgent.class);
         autonomy = new AutonomyProperties();
         autonomy.setEnabled(true);
+        pendingAssertionService = mock(com.linpj.novel.create.worldstate.PendingAssertionService.class);
     }
 
     private PlannerL2Gateway gateway() {
-        return new PlannerL2Gateway(null, runtime, autonomy, plannerAgent);
+        return new PlannerL2Gateway(null, runtime, autonomy, plannerAgent, pendingAssertionService);
     }
 
     private PipelineRequest request() {

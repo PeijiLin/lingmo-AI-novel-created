@@ -150,6 +150,8 @@ public class CreationPipelineService {
     private final com.linpj.novel.create.agent.WriterL2Gateway writerL2Gateway;
     /** Planner L2 网关（自主性改造 R2b：可空——大纲位试点，缺位时走 L1 现状） */
     private final com.linpj.novel.create.agent.PlannerL2Gateway plannerL2Gateway;
+    /** 提案提交门（自主性改造 R3：可空——Writer L2 提案闭环，缺位时提案保持 PENDING 待后续终稿重试） */
+    private final com.linpj.novel.create.worldstate.ProposalCommitGate proposalCommitGate;
 
     public CreationPipelineService(WriterAgent writerAgent,
                                     CriticAgent criticAgent,
@@ -257,7 +259,7 @@ public class CreationPipelineService {
         this(writerAgent, criticAgent, plannerAgent, polisherAgent, creationTaskService, artifactMapper,
                 contextAssemblyService, plotThreadService, outlineStoreService, creationEventProducer,
                 pipelineFeatures, ruleChecker, ruleExemptionService, finalDraftGate, streamSafetyGate,
-                budgetProperties, checkpointService, null, null, null, null, null);
+                budgetProperties, checkpointService, null, null, null, null, null, null);
     }
 
     /**
@@ -285,7 +287,8 @@ public class CreationPipelineService {
                                      AutonomyProperties autonomyProperties,
                                      com.linpj.novel.create.agent.CriticL2Gateway criticL2Gateway,
                                      com.linpj.novel.create.agent.WriterL2Gateway writerL2Gateway,
-                                     com.linpj.novel.create.agent.PlannerL2Gateway plannerL2Gateway) {
+                                     com.linpj.novel.create.agent.PlannerL2Gateway plannerL2Gateway,
+                                     com.linpj.novel.create.worldstate.ProposalCommitGate proposalCommitGate) {
         this.writerAgent = writerAgent;
         this.criticAgent = criticAgent;
         this.plannerAgent = plannerAgent;
@@ -308,6 +311,7 @@ public class CreationPipelineService {
         this.criticL2Gateway = criticL2Gateway;
         this.writerL2Gateway = writerL2Gateway;
         this.plannerL2Gateway = plannerL2Gateway;
+        this.proposalCommitGate = proposalCommitGate;
     }
 
     // ------------------------------------------------------------------
@@ -528,6 +532,7 @@ public class CreationPipelineService {
         usage.addTokens(result.tokens());
         usage.setStages(usage.getStages() + 1);
         settlePlotLedger(request, gated.text());
+        settleProposals(request, taskId);
         return false;
     }
 
@@ -545,6 +550,7 @@ public class CreationPipelineService {
             emitter.emitContent(gated.text());
         }
         settlePlotLedger(request, gated.text());
+        settleProposals(request, taskId);
         return outcome.degraded() || (budget != null && budget.degraded());
     }
 
@@ -568,7 +574,7 @@ public class CreationPipelineService {
         DraftOutcome outcome = runWriterCriticLoop(request, taskId, emitter, usage, plan.outline(), 2, total, features, budget);
 
         // —— 伏笔记账 + Polisher（序号 4）——
-        settleLedger(request, plan.outline(), outcome.draft());
+        settleLedger(request, taskId, plan.outline(), outcome.draft());
         // 先求值再或：|| 短路会跳过 Polisher（Planner 降级时正文已写出，润色仍需执行）
         boolean polishDegraded = runPolishing(request, taskId, emitter, usage, plan.outline(), outcome.draft(), budget);
         // 预算降级（L3 跳 Critic/Polisher、L1 关 best-of 等）合并冒泡
@@ -717,7 +723,7 @@ public class CreationPipelineService {
                 writerContext, selectedDraft, selectedWithRules.report(), 2, total, features, selectedWriteTokens, budget);
 
         // —— 伏笔记账 + Polisher（序号 4）——
-        settleLedger(request, plan.outline(), outcome.draft());
+        settleLedger(request, taskId, plan.outline(), outcome.draft());
         // 先求值再或：|| 短路会跳过 Polisher（Planner/双稿降级时正文已写出，润色仍需执行）
         boolean polishDegraded = runPolishing(request, taskId, emitter, usage, plan.outline(), outcome.draft(), budget);
         boolean budgetDegraded = budget != null && budget.degraded();
@@ -895,7 +901,7 @@ public class CreationPipelineService {
     }
 
     /** 伏笔记账：Planner 声明的 PLANT/RESOLVE + 终稿内联标记（均在终稿采纳后入账） */
-    private void settleLedger(PipelineRequest request, ChapterOutline outline, String draft) {
+    private void settleLedger(PipelineRequest request, Long taskId, ChapterOutline outline, String draft) {
         if (outline != null && outline.getPlotOps() != null && !outline.getPlotOps().isEmpty()) {
             try {
                 plotThreadService.applyPlotOperations(request.getBookId(), request.getChapterId(), outline.getPlotOps());
@@ -904,6 +910,24 @@ public class CreationPipelineService {
             }
         }
         settlePlotLedger(request, draft);
+        settleProposals(request, taskId);
+    }
+
+    /**
+     * 正典提案提交门（自主性改造 R3）：终稿采纳后统一裁定 Writer L2 暂存提案
+     * （PENDING→ADOPTED 入正典 / REJECTED 生死冲突转作者仲裁）。旁路闭环：
+     * 静默容错，失败保持 PENDING 待下次终稿重试，绝不阻断出章。
+     * 仅在 Writer L2 生效（L1 路径无提案账，proposalsOf 空集直接跳过——零开销）。
+     */
+    private void settleProposals(PipelineRequest request, Long taskId) {
+        if (proposalCommitGate == null || taskId == null || request.getBookId() == null) {
+            return;
+        }
+        try {
+            proposalCommitGate.settle(taskId, NODE_WRITING_R1, request.getBookId(), request.getChapterId());
+        } catch (Exception e) {
+            log.warn("提案提交门异常（保持 PENDING 待重试）: taskId={}, error={}", taskId, e.getMessage());
+        }
     }
 
     /**

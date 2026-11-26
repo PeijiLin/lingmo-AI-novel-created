@@ -111,8 +111,8 @@ class AgentMessagesTest {
 
         ToolResponseMessage toolMessage = assertInstanceOf(ToolResponseMessage.class, messages.get(3));
         assertEquals(1, toolMessage.getResponses().size());
-        assertEquals("{\"events\":[]}", toolMessage.getResponses().get(0).responseData(),
-                "回执 result 从回执表重放（不重调工具）");
+        assertEquals("[UNTRUSTED-DATA] {\"events\":[]}", toolMessage.getResponses().get(0).responseData(),
+                "回执 result 从回执表重放（不重调工具；R3 起带不可信数据标记）");
     }
 
     @Test
