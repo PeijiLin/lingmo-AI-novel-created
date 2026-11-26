@@ -8,7 +8,7 @@ import com.linpj.novel.create.context.UserStatusContext;
 import com.linpj.novel.create.exception.BusinessException;
 import com.linpj.novel.create.exception.ErrorCode;
 import com.linpj.novel.create.exception.ThrowsUtils;
-import com.linpj.novel.create.mapper.knowledge.KnowledgeBaseMapper;
+import com.linpj.novel.create.mapper.novel.KnowledgeBaseMapper;
 import com.linpj.novel.create.pojo.dto.KnowledgeBaseDto;
 import com.linpj.novel.create.pojo.dto.KnowledgeBasePageRequest;
 import com.linpj.novel.create.pojo.entity.KnowledgeBase;

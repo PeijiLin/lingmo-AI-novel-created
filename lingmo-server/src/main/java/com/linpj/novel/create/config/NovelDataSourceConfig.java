@@ -15,7 +15,7 @@ import org.springframework.context.annotation.Primary;
 import javax.sql.DataSource;
 
 @Configuration
-@MapperScan(basePackages = "com.linpj.novel.create.mapper.novel", sqlSessionTemplateRef = "novelSqlSessionTemplate")
+@MapperScan(basePackages = "com.linpj.novel.create.mapper", sqlSessionTemplateRef = "novelSqlSessionTemplate")
 public class NovelDataSourceConfig {
 
     @Bean

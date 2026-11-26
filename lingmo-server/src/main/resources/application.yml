@@ -11,7 +11,7 @@ server:
 
 spring:
   application:
-    name: "novel-creation-platform"
+    name: "lingmo-server"
   main:
     allow-bean-definition-overriding: true
   profiles:
@@ -29,16 +29,10 @@ spring:
   # 若本地没有该文件，则直接使用下面的默认值启动。
   # ================================================================
   datasource:
-    # 主库：小说平台业务库
+    # 单库：业务账本 + 知识库 + 向量库统一在 138/lingmo（单 DataSource）
     novel-system:
       driver-class-name: org.postgresql.Driver
-      jdbc-url: jdbc:postgresql://localhost:5432/novel_system
-      username: postgres
-      password: 123456
-    # 知识库：PGVector 向量库
-    novel-knowledge:
-      driver-class-name: org.postgresql.Driver
-      jdbc-url: jdbc:postgresql://192.168.220.138:5432/novel_knowledge_base
+      jdbc-url: jdbc:postgresql://192.168.220.138:5432/lingmo
       username: postgres
       password: 123456
   data:

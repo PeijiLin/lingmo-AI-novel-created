@@ -1,4 +1,4 @@
-package com.linpj.novel.create.mapper.knowledge;
+package com.linpj.novel.create.mapper.novel;
 
 import com.linpj.novel.create.pojo.entity.VectorStore;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;

@@ -43,7 +43,7 @@ public class VectorStoreConfig {
 
 
     @Bean
-    public PgVectorStore pgVectorStore(@Qualifier("knowledgeDataSource") DataSource dataSource,
+    public PgVectorStore pgVectorStore(@Qualifier("novelDataSource") DataSource dataSource,
                                        EmbeddingModel embeddingMode) {
         JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
         return PgVectorStore.builder(jdbcTemplate, embeddingMode)

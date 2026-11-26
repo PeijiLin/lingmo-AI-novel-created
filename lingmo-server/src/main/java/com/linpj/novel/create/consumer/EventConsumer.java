@@ -81,6 +81,11 @@ public class EventConsumer {
             return;
         }
         long knowledgeBaseId = knowledgeId.longValue();
+        KnowledgeBase knowledgeBase = knowledgeBaseService.getById(knowledgeBaseId);
+        if (knowledgeBase == null) {
+            logger.warn("文档上传事件引用的知识库不存在，跳过: knowledgeBaseId={}", knowledgeBaseId);
+            return;
+        }
 
         Map<String, String> params = fileUtil.generateParams(fileUrl);
         String objectName = params.get("objectName");
@@ -91,7 +96,7 @@ public class EventConsumer {
             tempFile = File.createTempFile("upload_", "_" + objectName);
             List<Document> documentList;
             try (InputStream inputStream = fileUtil.downloadByUrlAsStream(fileUrl)) {
-                documentList = getDocuments(inputStream, tempFile, knowledgeBaseId, objectName);
+                documentList = getDocuments(inputStream, tempFile, knowledgeBaseId, objectName, knowledgeBase.getBookId());
             }
             logger.info("{} documents loaded and split from uploaded file", documentList.size());
             dataInsert(knowledgeBaseId, documentList, documentList.stream());
@@ -116,7 +121,7 @@ public class EventConsumer {
         }
     }
 
-    private List<Document> getDocuments(InputStream inputStream, File tempFile, Long knowledgeBaseId, String originalFilename) throws IOException {
+    private List<Document> getDocuments(InputStream inputStream, File tempFile, Long knowledgeBaseId, String originalFilename, Long bookId) throws IOException {
         // 将输入流内容写入临时文件
         try (FileOutputStream outputStream = new FileOutputStream(tempFile)) {
             byte[] buffer = new byte[4096];
@@ -135,6 +140,8 @@ public class EventConsumer {
                     document.getMetadata().put("upload_time", System.currentTimeMillis());
                     document.getMetadata().put("filename", originalFilename);
                     document.getMetadata().put("knowledgeId", knowledgeBaseId);
+                    // 书级隔离键：检索按本次创作所属书籍过滤（必须为数值，避免过滤不命中）
+                    document.getMetadata().put("bookId", bookId);
                 })
                 .toList();
         return tokenTextSplitter.split(documentsWithMetadata);

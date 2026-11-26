@@ -57,7 +57,7 @@ public class CustomizeKnowledgeBaseServiceImpl implements CustomizeKnowledgeBase
         //解析文件
         try {
             tempFile = File.createTempFile("upload_", "_" + file.getOriginalFilename());
-            List<Document> documentList = getDocuments(file, tempFile, knowledgeBaseId);
+            List<Document> documentList = getDocuments(file, tempFile, knowledgeBaseId, byId.getBookId());
             logger.info("{} documents loaded and split from uploaded file", documentList.size());
             dataInsert(knowledgeBaseId, documentList, documentList.stream());
         } catch (IOException e) {
@@ -79,6 +79,10 @@ public class CustomizeKnowledgeBaseServiceImpl implements CustomizeKnowledgeBase
 
     @Override
     public void uploadContent(String content, Long knowledgeBaseId) {
+        KnowledgeBase byId = knowledgeBaseService.getById(knowledgeBaseId);
+        if (byId == null) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "知识库不存在");
+        }
         Document documents = new Document(content);
         List<Document> documentList = tokenTextSplitter.split(documents);
         List<Document> documentsWithMetadata = documentList.stream()
@@ -86,12 +90,14 @@ public class CustomizeKnowledgeBaseServiceImpl implements CustomizeKnowledgeBase
                     document.getMetadata().put("source", "upload_content");
                     document.getMetadata().put("upload_time", System.currentTimeMillis());
                     document.getMetadata().put("knowledgeId", knowledgeBaseId);
+                    // 书级隔离键：检索按本次创作所属书籍过滤（必须为数值，避免过滤不命中）
+                    document.getMetadata().put("bookId", byId.getBookId());
                 })
                 .toList();
         dataInsert(knowledgeBaseId, documentsWithMetadata, documentList.stream());
     }
 
-    private List<Document> getDocuments(MultipartFile file, File tempFile, Long knowledgeBaseId) throws IOException {
+    private List<Document> getDocuments(MultipartFile file, File tempFile, Long knowledgeBaseId, Long bookId) throws IOException {
         tempFile.deleteOnExit();
 
         // 将上传的文件内容写入临时文件
@@ -115,6 +121,8 @@ public class CustomizeKnowledgeBaseServiceImpl implements CustomizeKnowledgeBase
                     document.getMetadata().put("upload_time", System.currentTimeMillis());
                     document.getMetadata().put("filename", file.getOriginalFilename());
                     document.getMetadata().put("knowledgeId", knowledgeBaseId);
+                    // 书级隔离键：检索按本次创作所属书籍过滤（必须为数值，避免过滤不命中）
+                    document.getMetadata().put("bookId", bookId);
                 })
                 .toList();
         return tokenTextSplitter.split(documentsWithMetadata);

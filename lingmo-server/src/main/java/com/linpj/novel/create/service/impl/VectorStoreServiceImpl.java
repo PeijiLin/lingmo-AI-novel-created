@@ -3,7 +3,7 @@ package com.linpj.novel.create.service.impl;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.linpj.novel.create.pojo.entity.VectorStore;
 import com.linpj.novel.create.service.VectorStoreService;
-import com.linpj.novel.create.mapper.knowledge.VectorStoreMapper;
+import com.linpj.novel.create.mapper.novel.VectorStoreMapper;
 import org.springframework.stereotype.Service;
 
 /**
