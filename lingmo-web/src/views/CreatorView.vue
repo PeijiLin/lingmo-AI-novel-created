@@ -7,14 +7,16 @@
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Sparkles, Save, Send } from 'lucide-vue-next'
+import { Sparkles, Save, Send, ShieldCheck } from 'lucide-vue-next'
 import CreationShell from '@/layouts/CreationShell.vue'
 import { Button, Dialog, Input, Sheet } from '@/components/ui'
 import ChapterTree from '@/components/base/ChapterTree.vue'
 import DraftPaper from '@/components/base/DraftPaper.vue'
 import PipelinePanel from '@/components/base/PipelinePanel.vue'
 import VermilionNote from '@/components/base/VermilionNote.vue'
+import ReviewSheet from '@/components/base/ReviewSheet.vue'
 import { useToast } from '@/composables/useToast'
+import { useReviewQueue } from '@/composables/useReviewQueue'
 import { explainAiError } from '@/utils/aiError'
 import { useChapters } from '@/composables/useChapters'
 import { useAiCreation, type AiAction } from '@/composables/useAiCreation'
@@ -58,9 +60,30 @@ watch(
   (chapter) => applyChapter(chapter),
 )
 
+/* ---------------- 人审待办（延迟拉取，不阻塞创作台首屏） ---------------- */
+
+const review = useReviewQueue(bookId)
+const reviewSheetOpen = ref(false)
+const pendingReviewCount = computed(() => {
+  const counts = review.overview.value?.counts
+  if (!counts) return 0
+  return (counts.conflict ?? 0) + (counts.assertion ?? 0) + (counts.safety ?? 0) + (counts.unmet ?? 0)
+})
+
 onMounted(async () => {
   await Promise.all([loadBook(), chapters.loadAll()])
   applyChapter(chapters.currentChapter.value)
+})
+
+onMounted(() => {
+  const loadReviewBadge = () => {
+    void review.load()
+  }
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(loadReviewBadge)
+  } else {
+    window.setTimeout(loadReviewBadge, 2000)
+  }
 })
 
 /* ---------------- 保存 / 发布 ---------------- */
@@ -317,6 +340,11 @@ const pipelineSheetOpen = ref(false)
     </template>
 
     <template #actions>
+      <!-- 人审队列：Sheet 内处理，不卸载稿纸 -->
+      <Button variant="outline" size="sm" aria-label="人审队列" @click="reviewSheetOpen = true">
+        <ShieldCheck class="size-3.5 text-cinnabar" />
+        <span class="hidden sm:inline">人审{{ pendingReviewCount ? ` ${pendingReviewCount}` : '' }}</span>
+      </Button>
       <!-- 窄屏：唤起流水线抽屉 -->
       <Button variant="outline" size="sm" class="xl:hidden" @click="pipelineSheetOpen = true">
         <Sparkles class="size-3.5 text-cinnabar" />
@@ -412,4 +440,7 @@ const pipelineSheetOpen = ref(false)
       </div>
     </section>
   </Sheet>
+
+  <!-- 人审抽屉：保留稿纸编辑态 -->
+  <ReviewSheet v-model:open="reviewSheetOpen" :book-id="bookId" />
 </template>

@@ -56,6 +56,8 @@ export interface RequestOptions {
   params?: Record<string, string | number | boolean | undefined | null>
   /** 内部：刷新后重放标记，防止无限循环 */
   retried?: boolean
+  /** 响应体类型：'blob' 用于文件下载（跳过信封解包，仍复用 401 刷新） */
+  responseType?: 'json' | 'blob'
 }
 
 export interface HttpClient {
@@ -155,6 +157,23 @@ export function createHttpClient(deps: HttpClientDeps): HttpClient {
   async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
     const token = deps.tokenStore.getAccessToken()
     const res = await rawRequest(method, path, options, token)
+
+    // 文件下载：无 JSON 信封，但仍需 Bearer 与 401 单飞刷新/重放
+    if (options.responseType === 'blob') {
+      if (res.status === 401) {
+        if (!options.retried && (await refreshOnce())) {
+          return request<T>(method, path, { ...options, retried: true })
+        }
+        deps.tokenStore.clearTokens()
+        deps.onAuthExpired?.()
+        throw new ApiClientError(40100, '登录已过期，请重新登录', res.status)
+      }
+      if (!res.ok) {
+        throw new ApiClientError(res.status >= 500 ? 50000 : 40000, `下载失败（HTTP ${res.status}）`, res.status)
+      }
+      return (await res.blob()) as T
+    }
+
     const payload = await parseEnvelope<T>(res)
 
     // 登录态失效：HTTP 401 或业务码 40100（未登录）/ 40101（无权限，网关令牌过期场景）

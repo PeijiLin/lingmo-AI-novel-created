@@ -162,3 +162,34 @@ describe('请求构造', () => {
     expect(bearerOf(call)).toBe('Bearer t0')
   })
 })
+
+describe('文件下载（responseType: blob）', () => {
+  it('返回 Blob，跳过 JSON 信封解包', async () => {
+    const kit = makeDeps({ access: 't0', refresh: 'r0' }, [])
+    const csv = new Blob(['\ufeff模式,节点'], { type: 'text/csv' })
+    kit.setHandlers([() => new Response(csv, { status: 200 })])
+    const client = createHttpClient(kit.deps)
+
+    const blob = await client.get<Blob>('/cost/1/export', { responseType: 'blob' })
+
+    expect(blob).toBeInstanceOf(Blob)
+    expect(blob.size).toBeGreaterThan(0)
+    expect(bearerOf(kit.calls[0])).toBe('Bearer t0')
+  })
+
+  it('HTTP 401 时单飞刷新并携带新令牌重放', async () => {
+    const kit = makeDeps({ access: 'old', refresh: 'r1' }, [])
+    kit.setHandlers([
+      () => new Response(null, { status: 401 }),
+      () => envelope(200, { access_token: 'new', refresh_token: 'r2', userId: 1 }),
+      () => new Response(new Blob(['ok']), { status: 200 }),
+    ])
+    const client = createHttpClient(kit.deps)
+
+    const blob = await client.get<Blob>('/cost/1/export', { responseType: 'blob' })
+
+    expect(blob.size).toBeGreaterThan(0)
+    expect(kit.calls.filter((c) => c.url.endsWith('/user/refresh-token'))).toHaveLength(1)
+    expect(bearerOf(kit.calls[2])).toBe('Bearer new')
+  })
+})

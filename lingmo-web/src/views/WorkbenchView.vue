@@ -107,7 +107,17 @@ function openCreator(book: BookInfoVo) {
       </div>
 
       <div v-else-if="books.length > 0" class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-        <BookScrollCard v-for="book in books" :key="book.id" :book="book" @open="openCreator" />
+        <div v-for="book in books" :key="book.id" class="relative">
+          <BookScrollCard :book="book" @open="openCreator" />
+          <button
+            v-if="book.id"
+            type="button"
+            class="absolute right-2 bottom-2 rounded-md border border-mist-line bg-paper-surface/95 px-2 py-1 text-[11px] text-ink-secondary shadow-card transition-colors hover:border-cinnabar/40 hover:text-cinnabar focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cinnabar/40"
+            @click.stop="router.push(`/governance/${book.id}`)"
+          >
+            质量治理
+          </button>
+        </div>
       </div>
 
       <!-- 空态：首屏即创作 -->

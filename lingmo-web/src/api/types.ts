@@ -251,3 +251,91 @@ export interface CreationTask {
   createdAt?: string
   updatedAt?: string
 }
+
+/* ---------------- 质量治理（成本 / 人审 / 规则豁免） ---------------- */
+
+/** 成本汇总行：模式 × 节点 × 模型聚合 */
+export interface CostRow {
+  mode: string
+  node: string
+  model: string
+  runs: number
+  totalTokens: number
+  cost: number
+  priced: boolean
+}
+
+export type ReviewType = 'conflict' | 'assertion' | 'safety' | 'unmet'
+
+/** 四类人审决策请求体；accept=true 为确认/通过，false 为驳回 */
+export interface ReviewDecision {
+  accept: boolean
+  note?: string
+}
+
+export interface NovelWikiConflict {
+  id?: number
+  bookId?: number
+  chapterId?: number
+  characterId?: number
+  conflictKind?: string
+  oldValue?: string
+  newValue?: string
+  status?: string
+  note?: string
+  createdAt?: string
+  resolvedAt?: string
+}
+
+export interface NovelPendingAssertion {
+  id?: number
+  bookId?: number
+  chapterId?: number
+  characterId?: number
+  assertionType?: string
+  payload?: string
+  status?: string
+  confirmations?: number
+  expiresChapter?: number
+  createdAt?: string
+  resolvedAt?: string
+}
+
+export interface NovelSafetyLog {
+  id?: number
+  bookId?: number
+  layer?: 'PRE' | 'STREAM' | 'POST'
+  category?: string
+  action?: string
+  detail?: string
+  createdAt?: string
+}
+
+export interface ReviewOverview {
+  counts: Record<ReviewType, number>
+  conflict: NovelWikiConflict[]
+  assertion: NovelPendingAssertion[]
+  safety: NovelSafetyLog[]
+  unmet: CreationTask[]
+}
+
+export interface NovelRuleExemption {
+  id?: number
+  bookId?: number
+  ruleId?: string
+  reason?: string
+  /** chapterFrom/chapterTo 为空表示整本豁免，填值表示叙诡保护区 */
+  chapterFrom?: number | null
+  chapterTo?: number | null
+  reviewAt?: string | null
+  createdAt?: string
+}
+
+export interface ExemptRequest {
+  bookId: number
+  ruleId: string
+  reason?: string
+  chapterFrom?: number
+  chapterTo?: number
+  reviewAt?: string
+}

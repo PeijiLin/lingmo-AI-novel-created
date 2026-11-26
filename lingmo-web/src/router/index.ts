@@ -40,6 +40,12 @@ const router = createRouter({
       props: true,
     },
     {
+      path: '/governance/:id',
+      name: 'governance',
+      component: () => import('@/views/GovernanceView.vue'),
+      props: true,
+    },
+    {
       path: '/reader/:id',
       name: 'reader',
       component: () => import('@/views/ReaderView.vue'),

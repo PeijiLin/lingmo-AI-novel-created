@@ -19,8 +19,10 @@ import java.util.List;
  * POST   /api/book/rule-exemption                        标记误报或声明保护区（带章节区间即为保护区）
  * GET    /api/book/rule-exemption/{bookId}               本书豁免/保护区清单（含理由与复核时间）
  * GET    /api/book/rule-exemption/{bookId}/due           到期复核队列（过期项提醒续期或撤回）
- * PUT    /api/book/rule-exemption/{bookId}/{ruleId}/review  调整复核时间（body 为空 = 长期有效）
- * DELETE /api/book/rule-exemption/{bookId}/{ruleId}      撤销豁免（规则修正后恢复检查）
+ * PUT    /api/book/rule-exemption/{bookId}/review?ruleId=x  调整复核时间（规则 ID 含特殊字符时用此入口）
+ * PUT    /api/book/rule-exemption/{bookId}/{ruleId}/review  调整复核时间（兼容简单规则 ID，body 为空 = 长期有效）
+ * DELETE /api/book/rule-exemption/{bookId}?ruleId=x        撤销豁免（规则 ID 含特殊字符时用此入口）
+ * DELETE /api/book/rule-exemption/{bookId}/{ruleId}        撤销豁免（兼容简单规则 ID）
  *
  * @author HL
  */
@@ -91,11 +93,26 @@ public class RuleExemptionController {
         return ResultUtils.success(ruleExemptionService.listDueForReview(bookId));
     }
 
-    /** 调整复核时间：续期（新到期时间）或改为长期有效（reviewAt 为空） */
+    /**
+     * 调整复核时间（query 传 ruleId）：规则 ID 可含 / ? & 等字符，
+     * 走路径变量会被容器解码成路径分隔符并返回 400，故单独提供此入口。
+     */
+    @PutMapping("/{bookId}/review")
+    public BaseResponse<Boolean> reviewByParam(@PathVariable("bookId") Long bookId,
+                                               @RequestParam("ruleId") String ruleId,
+                                               @RequestBody(required = false) ReviewRequest request) {
+        return doReview(bookId, ruleId, request);
+    }
+
+    /** 调整复核时间：续期（新到期时间）或改为长期有效（reviewAt 为空），兼容简单规则 ID */
     @PutMapping("/{bookId}/{ruleId}/review")
     public BaseResponse<Boolean> review(@PathVariable("bookId") Long bookId,
                                         @PathVariable("ruleId") String ruleId,
                                         @RequestBody(required = false) ReviewRequest request) {
+        return doReview(bookId, ruleId, request);
+    }
+
+    private BaseResponse<Boolean> doReview(Long bookId, String ruleId, ReviewRequest request) {
         ThrowsUtils.throwIf(bookId == null || bookId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowsUtils.throwIf(ruleId == null || ruleId.isBlank(), ErrorCode.PARAMS_ERROR);
         Date reviewAt = request == null ? null : request.getReviewAt();
@@ -103,10 +120,21 @@ public class RuleExemptionController {
         return ok ? ResultUtils.success(Boolean.TRUE) : ResultUtils.error(ErrorCode.NOT_FOUND_ERROR, "豁免记录不存在");
     }
 
-    /** 撤销豁免：规则修正后恢复检查 */
+    /** 撤销豁免（query 传 ruleId，支持任意字符的规则 ID） */
+    @DeleteMapping("/{bookId}")
+    public BaseResponse<Boolean> revokeByParam(@PathVariable("bookId") Long bookId,
+                                               @RequestParam("ruleId") String ruleId) {
+        return doRevoke(bookId, ruleId);
+    }
+
+    /** 撤销豁免：规则修正后恢复检查，兼容简单规则 ID */
     @DeleteMapping("/{bookId}/{ruleId}")
     public BaseResponse<Boolean> revoke(@PathVariable("bookId") Long bookId,
                                         @PathVariable("ruleId") String ruleId) {
+        return doRevoke(bookId, ruleId);
+    }
+
+    private BaseResponse<Boolean> doRevoke(Long bookId, String ruleId) {
         ThrowsUtils.throwIf(bookId == null || bookId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowsUtils.throwIf(ruleId == null || ruleId.isBlank(), ErrorCode.PARAMS_ERROR);
         boolean ok = ruleExemptionService.revoke(bookId, ruleId);
