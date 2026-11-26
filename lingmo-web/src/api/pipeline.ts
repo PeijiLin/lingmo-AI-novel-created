@@ -10,7 +10,7 @@
  */
 import { http } from '@/utils/http'
 import { streamSse, type SseEvent } from '@/utils/sse'
-import type { AiChatRequest, CreationTask } from './types'
+import type { AiChatRequest, CreationTask, RunSummary } from './types'
 
 const BASE = '/api/book/create/ai'
 
@@ -36,6 +36,11 @@ export function submitAsyncPipeline(request: AiChatRequest): Promise<number> {
 /** 查询异步任务进度与用量（轮询） */
 export function queryCreationTask(taskId: number): Promise<CreationTask> {
   return http.get<CreationTask>(`${BASE}/pipeline/task/${taskId}`)
+}
+
+/** 查询 run 级执行汇总：任务 + 成功节点 + 阶段产物概览（不含正文） */
+export function queryRun(runId: number): Promise<RunSummary> {
+  return http.get<RunSummary>(`${BASE}/pipeline/run/${runId}`)
 }
 
 /* ---------------- 旧五端点（非流式，兼容保留） ---------------- */

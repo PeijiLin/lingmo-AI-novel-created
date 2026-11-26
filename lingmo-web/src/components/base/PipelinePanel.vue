@@ -5,7 +5,7 @@
  */
 import { computed } from 'vue'
 import { Play, Square, Sparkles, Layers, GitCompareArrows, Gauge, TriangleAlert } from 'lucide-vue-next'
-import { Badge, Button, Select } from '@/components/ui'
+import { Badge, Button, Input, Select } from '@/components/ui'
 import { cn } from '@/utils/cn'
 import type { CreationMode } from '@/api/types'
 import type { AiAction, AiRunState, RunChannel } from '@/composables/useAiCreation'
@@ -20,6 +20,9 @@ const mode = defineModel<CreationMode>('mode', { required: true })
 const maxRewriteRounds = defineModel<string>('maxRewriteRounds', { required: true })
 const channel = defineModel<RunChannel>('channel', { required: true })
 const action = defineModel<AiAction>('action', { required: true })
+/** 常规写作参数：不传则后端字数/视角规则静默 */
+const targetWordCount = defineModel<string>('targetWordCount', { required: true })
+const pov = defineModel<string>('pov', { required: true })
 
 const emit = defineEmits<{
   run: [action: AiAction]
@@ -122,6 +125,16 @@ function pickMode(value: CreationMode) {
           流式
           <input v-model="channel" type="radio" value="async" class="ml-1.5 accent-ink-indigo" name="channel" />
           整章任务
+        </label>
+      </div>
+      <div class="mt-2 grid grid-cols-2 gap-2">
+        <label class="flex flex-col gap-1 text-xs text-ink-secondary">
+          目标字数
+          <Input v-model="targetWordCount" inputmode="numeric" placeholder="不限（正整数）" />
+        </label>
+        <label class="flex flex-col gap-1 text-xs text-ink-secondary">
+          叙事视角
+          <Input v-model="pov" placeholder="如：第一人称" maxlength="40" />
         </label>
       </div>
     </section>

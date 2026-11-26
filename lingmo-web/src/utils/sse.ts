@@ -30,6 +30,8 @@ export interface StageEventPayload {
   degraded?: boolean
   usage?: StageUsage
   error?: string
+  /** POLISHING STARTED 携带：草稿态，随后 REVISION 整稿替换 */
+  draft?: boolean
 }
 
 export type SseEvent =

@@ -222,18 +222,35 @@ export interface AiChatRequest {
   mode?: CreationMode
   /** Critic 重写轮数上限（默认 2，硬上限 3），仅 STANDARD/REFINED/PRECISE 生效 */
   maxRewriteRounds?: number
+  /** 本章目标字数；不传则后端 RC-11 字数规则静默 */
+  targetWordCount?: number
+  /** 叙事视角约束；不传则后端 RC-12 POV 规则静默 */
+  pov?: string
 }
 
-/** SSE stage 事件载荷（utils/sse.ts StageEventPayload 的 api 层视角） */
+/** SSE stage 事件 code（后端 StageCode） */
+export type StageCode = 'PLANNING' | 'WRITING' | 'CRITIC' | 'POLISHING' | 'COMPLETED' | 'FAILED'
+/** SSE stage 事件 status */
+export type StageStatus = 'STARTED' | 'REVISION' | 'COMPLETED' | 'FAILED'
+
+export interface StageUsage {
+  stages: number
+  totalTokens: number
+  elapsedMs: number
+}
+
+/** SSE stage 事件载荷（Gson 序列化省略 null，故非判别字段均可选） */
 export interface StageEvent {
-  code: string
-  status: string
+  code: StageCode
+  status: StageStatus
   index?: number
   total?: number
   round?: number
   degraded?: boolean
-  usage?: { stages: number; totalTokens: number; elapsedMs: number }
+  usage?: StageUsage
   error?: string
+  /** POLISHING STARTED 携带：当前为草稿态，随后 REVISION 会整稿替换 */
+  draft?: boolean
 }
 
 /** 异步创作任务（creation_task） */
@@ -241,15 +258,30 @@ export interface CreationTask {
   id?: number
   bookId?: number
   chapterId?: number
-  mode?: string
+  mode?: CreationMode | string
   status?: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
   currentStage?: string
   degraded?: boolean
   totalTokens?: number
   elapsedMs?: number
   error?: string
+  /** 模式快照 featureSnapshot 或异步任务参数，业务层按需解析 */
+  params?: unknown
   createdAt?: string
   updatedAt?: string
+}
+
+/** GET /pipeline/run/{runId} 的产物概览（不含正文） */
+export interface RunArtifactSummary {
+  stage: string
+  round: number
+  tokens: number
+  createdAt: string
+}
+export interface RunSummary {
+  task: CreationTask
+  succeededNodes: string[]
+  artifacts: RunArtifactSummary[]
 }
 
 /* ---------------- 质量治理（成本 / 人审 / 规则豁免） ---------------- */

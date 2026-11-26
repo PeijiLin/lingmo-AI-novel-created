@@ -25,6 +25,8 @@ const kindLabel = computed(() => {
 })
 
 const streaming = computed(() => props.note.status === 'streaming')
+/** 润色草稿态：终稿尚未替换前不允许采纳 */
+const draft = computed(() => !!props.note.draft)
 </script>
 
 <template>
@@ -57,7 +59,11 @@ const streaming = computed(() => props.note.status === 'streaming')
       </p>
       <p v-if="streaming" class="mt-1 flex items-center gap-1 text-[11px] text-cinnabar">
         <Loader2 class="size-3 animate-spin" />
-        朱批落笔中
+        {{ draft ? '草稿落笔中 · 待终稿替换' : '朱批落笔中' }}
+      </p>
+      <p v-else-if="draft" class="mt-1 flex items-center gap-1 text-[11px] text-cinnabar">
+        <Loader2 class="size-3" />
+        草稿 · 待终稿替换
       </p>
     </div>
 
@@ -69,6 +75,7 @@ const streaming = computed(() => props.note.status === 'streaming')
       <span v-else-if="note.status === 'dismissed'" class="text-[11px] text-mist">已放弃</span>
       <template v-else>
         <button
+          v-if="!draft"
           type="button"
           class="inline-flex h-7 items-center gap-1 rounded-md bg-cinnabar px-2.5 text-xs font-medium text-paper-surface transition-colors duration-150 ease-[var(--ease-paper)] hover:bg-cinnabar/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cinnabar/40"
           @click="emit('adopt', note.id)"

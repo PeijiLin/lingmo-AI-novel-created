@@ -7,12 +7,13 @@
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Sparkles, Save, Send, ShieldCheck } from 'lucide-vue-next'
+import { Sparkles, Save, Send, History, ShieldCheck } from 'lucide-vue-next'
 import CreationShell from '@/layouts/CreationShell.vue'
 import { Button, Dialog, Input, Sheet } from '@/components/ui'
 import ChapterTree from '@/components/base/ChapterTree.vue'
 import DraftPaper from '@/components/base/DraftPaper.vue'
 import PipelinePanel from '@/components/base/PipelinePanel.vue'
+import PipelineRunInspector from '@/components/base/PipelineRunInspector.vue'
 import VermilionNote from '@/components/base/VermilionNote.vue'
 import ReviewSheet from '@/components/base/ReviewSheet.vue'
 import { useToast } from '@/composables/useToast'
@@ -23,6 +24,7 @@ import { useAiCreation, type AiAction } from '@/composables/useAiCreation'
 import { getBookInfo, publishBook } from '@/api/books'
 import type { BookInfoVo, ChapterDraft, CreationMode } from '@/api/types'
 import { textToTiptapDoc } from '@/utils/tiptap'
+import { parsePositiveInt } from '@/utils/validation'
 
 const route = useRoute()
 const router = useRouter()
@@ -187,6 +189,8 @@ const mode = ref<CreationMode>('STANDARD')
 const maxRewriteRounds = ref('2')
 const channel = ref<'sync' | 'async'>('sync')
 const action = ref<AiAction>('续写')
+const targetWordCount = ref('')
+const pov = ref('')
 
 const selection = reactive({ from: 0, to: 0, empty: true, text: '' })
 const hasSelection = computed(() => !selection.empty && selection.text.trim().length > 0)
@@ -232,6 +236,8 @@ function buildRequest(act: AiAction) {
       creationType,
       mode: effectiveMode,
       maxRewriteRounds: effectiveMode === 'FAST' ? undefined : Number(maxRewriteRounds.value),
+      targetWordCount: parsePositiveInt(targetWordCount.value),
+      pov: pov.value.trim() || undefined,
     },
     anchorPos,
     label,
@@ -239,6 +245,10 @@ function buildRequest(act: AiAction) {
 }
 
 async function handleRun(act: AiAction) {
+  if (targetWordCount.value.trim() && parsePositiveInt(targetWordCount.value) === undefined) {
+    toast.warning('目标字数需为正整数')
+    return
+  }
   if (!currentChapter.value?.id) {
     toast.warning('请先创建章节再唤起 AI')
     return
@@ -322,9 +332,10 @@ function handleDismiss(noteId: number) {
 
 const activeNotes = computed(() => ai.notes.filter((n) => n.status !== 'dismissed'))
 
-/* ---------------- 窄屏流水线抽屉 ---------------- */
+/* ---------------- 流水线抽屉与运行详情 ---------------- */
 
 const pipelineSheetOpen = ref(false)
+const runInspectorOpen = ref(false)
 </script>
 
 <template>
@@ -386,12 +397,24 @@ const pipelineSheetOpen = ref(false)
         <header class="flex shrink-0 items-center gap-2 border-b border-mist-line px-4 py-3">
           <Sparkles class="size-4 text-cinnabar" />
           <h2 class="font-book text-sm font-semibold text-ink">AI 流水线</h2>
+          <Button
+            v-if="ai.state.taskId"
+            variant="ghost"
+            size="sm"
+            class="ml-auto"
+            @click="runInspectorOpen = true"
+          >
+            <History class="size-3.5" />
+            运行详情
+          </Button>
         </header>
         <PipelinePanel
           v-model:mode="mode"
           v-model:max-rewrite-rounds="maxRewriteRounds"
           v-model:channel="channel"
           v-model:action="action"
+          v-model:target-word-count="targetWordCount"
+          v-model:pov="pov"
           :state="ai.state"
           :has-selection="hasSelection"
           @run="handleRun"
@@ -422,6 +445,8 @@ const pipelineSheetOpen = ref(false)
       v-model:max-rewrite-rounds="maxRewriteRounds"
       v-model:channel="channel"
       v-model:action="action"
+      v-model:target-word-count="targetWordCount"
+      v-model:pov="pov"
       :state="ai.state"
       :has-selection="hasSelection"
       @run="(a) => { pipelineSheetOpen = false; handleRun(a) }"
@@ -443,4 +468,7 @@ const pipelineSheetOpen = ref(false)
 
   <!-- 人审抽屉：保留稿纸编辑态 -->
   <ReviewSheet v-model:open="reviewSheetOpen" :book-id="bookId" />
+
+  <!-- 运行详情：节点与阶段产物概览 -->
+  <PipelineRunInspector v-model:open="runInspectorOpen" :run-id="ai.state.taskId" />
 </template>

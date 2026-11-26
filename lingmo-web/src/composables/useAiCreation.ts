@@ -31,6 +31,8 @@ export interface VermilionNote {
   /** Tiptap 文档锚点（ProseMirror pos，由视图按策略计算） */
   anchorPos: number
   status: 'streaming' | 'ready' | 'adopted' | 'dismissed'
+  /** POLISHING 草稿态：后续 REVISION 会整稿替换，此期间不可采纳/保存 */
+  draft?: boolean
 }
 
 export interface AiRunState {
@@ -124,7 +126,13 @@ export function useAiCreation() {
         const progress: StageProgress = { code: s.code, status: s.status, index: s.index, total: s.total }
         state.stages.push(progress)
         state.currentStage = progress
+        // 润色阶段先发草稿：此期间内容会被终稿整体替换，禁止采纳/保存
+        patchNote(noteId, { draft: !!s.draft })
       } else if (s.status === 'REVISION') {
+        // 后端语义：REVISION 之后的 content 是整稿替换，不是追加。
+        // 不清空会把重写前旧稿与新稿拼接，采纳后污染稿纸。
+        state.streamText = ''
+        patchNote(noteId, { text: '', draft: false })
         const progress: StageProgress = { code: s.code, status: s.status, round: s.round }
         state.stages.push(progress)
         state.currentStage = progress
@@ -132,11 +140,11 @@ export function useAiCreation() {
         state.degraded = !!s.degraded
         state.usage = s.usage ?? null
         state.running = false
-        patchNote(noteId, { status: 'ready' })
+        patchNote(noteId, { status: 'ready', draft: false })
       } else if (s.code === 'FAILED') {
         state.error = s.error || '流水线执行失败'
         state.running = false
-        patchNote(noteId, { status: 'dismissed' })
+        patchNote(noteId, { status: 'dismissed', draft: false })
       }
       return
     }
