@@ -25,15 +25,15 @@ Frontend commands run from `lingmo-web/` (npm; on Windows PowerShell use `npm.cm
 
 - Defaults in `lingmo-server/src/main/resources/application.yml`: port `8088`, servlet context path `/api`, profile `dev`. `lingmo-server/src/main/resources/application-dev.yml` is gitignored and overrides the defaults; without it the checked-in values are used.
 - `spring.ai.openai.*` keys are placeholders (`sk-xxxx`); AI/RAG calls fail until real chat + embedding keys are configured locally.
-- Default infrastructure: PostgreSQL `novel_system` at `localhost:5432`; PGVector DB `novel_knowledge_base` at `192.168.220.138:5432`; Redis at `192.168.220.138:6379` (db 15); Kafka at `192.168.220.138:9092`; MinIO at `192.168.220.138:9000`.
-- No Flyway/Liquibase. `lingmo-server/sql/` is additive, not a full base schema: it contains character-card, v2 pipeline/world-state, and vector-KB DDL, but not `book_info`, `user_info`, or the other base tables. A fresh checkout needs an existing `novel_system` schema/dump.
-- Apply `lingmo-server/sql/character_cards.sql` then `lingmo-server/sql/multi_agent.sql` to `novel_system`; apply `lingmo-server/sql/knowledge_base.psql` to `novel_knowledge_base` (needs pgvector). Pipeline tables depend on `multi_agent.sql`.
+- Default infrastructure: single PostgreSQL `lingmo` at `192.168.220.138:5432` (business tables + world-state ledgers + knowledge base + pgvector); Redis at `192.168.220.138:6379` (db 15); Kafka at `192.168.220.138:9092`; MinIO at `192.168.220.138:9000`.
+- No Flyway/Liquibase. `lingmo-server/sql/` is additive, not a full base schema: it contains character-card, v2 pipeline/world-state, Wiki/RAG and vector-KB DDL, but not `book_info`, `user_info`, or the other base tables. A fresh checkout needs an existing `lingmo` schema/dump.
+- Apply `lingmo-server/sql/character_cards.sql`, `lingmo-server/sql/multi_agent.sql`, then `lingmo-server/sql/wiki_rag.sql` to `lingmo`; `sql/knowledge_base.psql` is obsolete (pre-pgvector single-DB design). Pipeline tables depend on `multi_agent.sql`.
 - `lingmo-server/sql/multi_agent.sql` is GBK-encoded while the other SQL files are UTF-8; convert it to UTF-8 if psql rejects its Chinese comments.
 - Kafka topics (`novel.creation.task`, `novel.chapter.finalized`) are created by `KafkaConfig`; no manual topic setup.
 
 ## Architecture
 
-- Package root: `lingmo-server/src/main/java/com/linpj/novel/create`. Two PostgreSQL datasources are bound by `@MapperScan`: `mapper.novel` uses the primary `novel-system`, `mapper.knowledge` uses `novel-knowledge`. Keep new mappers in the correct package and don't add a global `@MapperScan`.
+- Package root: `lingmo-server/src/main/java/com/linpj/novel/create`. One PostgreSQL datasource (`spring.datasource.novel-system` → `138/lingmo`) bound by `@MapperScan` on `com.linpj.novel.create.mapper`; keep new mappers under `mapper/novel` and don't add another `@MapperScan`. `PgVectorStore` uses the same DataSource (`VectorStoreConfig`), so chunk metadata and vectors share a transaction.
 - `pipeline.CreationPipelineService` is the v2 core. `CreationMode` selects topology: FAST = Writer; STANDARD = Writer + Critic rewrite loop; REFINED = Planner + Writer + Critic + Polisher; PRECISE = REFINED + parallel dual draft. `maxRewriteRounds` is clamped to 1–3.
 - App entrypoint is `NovelCreationPlatformApplication`; root `Main.java` is not the main class but a `/health` controller.
 - Entry points: `CreationPipelineController` under `/api/book/create/ai` (`/pipeline` SSE, `/pipeline/async`, `/pipeline/task/{id}`, `/pipeline/run/{runId}`). `NovelAICreationController` keeps the legacy `/polish`, `/activate`, `/create`, `/continue`, `/dialogue` endpoints backed by `NovelAICreationService`; don't break them when editing the pipeline.
@@ -58,3 +58,5 @@ Frontend commands run from `lingmo-web/` (npm; on Windows PowerShell use `npm.cm
 
 - No lint/formatter/static-analysis config for the backend and no CI. `cd lingmo-server && mvn test` is the backend gate. Frontend gate: `cd lingmo-web && npm.cmd run type-check && npm.cmd run test:unit -- --run && npm.cmd run build`.
 - Tests are unit-level; there is no test profile/config for Spring-context tests.
+
+> AI生成
