@@ -1,14 +1,18 @@
 package com.linpj.novel.create.worldstate;
 
+import com.linpj.novel.create.pojo.entity.BookChapter;
 import com.linpj.novel.create.pojo.entity.BookInfo;
+import com.linpj.novel.create.pojo.entity.CharacterRelationships;
 import com.linpj.novel.create.pojo.pipeline.ChapterOutline;
 import com.linpj.novel.create.pojo.pipeline.CriticContext;
 import com.linpj.novel.create.pojo.pipeline.PipelineRequest;
 import com.linpj.novel.create.pojo.pipeline.PlannerContext;
 import com.linpj.novel.create.pojo.pipeline.WriterContext;
 import com.linpj.novel.create.pojo.vo.CharacterCardsVo;
+import com.linpj.novel.create.service.BookChapterService;
 import com.linpj.novel.create.service.BookInfoService;
 import com.linpj.novel.create.service.CharacterCardsService;
+import com.linpj.novel.create.service.CharacterRelationshipsService;
 import com.linpj.novel.create.service.CharacterStateService;
 import com.linpj.novel.create.service.PlotThreadService;
 import com.linpj.novel.create.service.StoryDigestService;
@@ -42,13 +46,16 @@ class ContextAssemblyServiceTest {
     @Mock private StoryDigestService storyDigestService;
     @Mock private PlotThreadService plotThreadService;
     @Mock private CharacterStateService characterStateService;
+    @Mock private CharacterRelationshipsService characterRelationshipsService;
+    @Mock private BookChapterService bookChapterService;
 
     private ContextAssemblyService service;
 
     @BeforeEach
     void setUp() {
         service = new ContextAssemblyService(characterCardsService, bookInfoService,
-                storyDigestService, plotThreadService, characterStateService);
+                storyDigestService, plotThreadService, characterStateService,
+                characterRelationshipsService, bookChapterService);
     }
 
     private PipelineRequest request(String frontendWorldSetting) {
@@ -144,6 +151,32 @@ class ContextAssemblyServiceTest {
 
         assertTrue(context.getCharacterInfo().contains("主角"));
         assertTrue(context.getCharacterInfo().contains("配角"));
+    }
+
+    @Test
+    void relationshipEdgesPrependToCharacterInfoWithChapterFilter() {
+        when(bookInfoService.getById(1L)).thenReturn(null);
+        when(characterCardsService.getCharacterCardsByProjectId(1L))
+                .thenReturn(List.of(character(1L, "主角"), character(2L, "配角")));
+        when(characterStateService.renderStates(eq(1L), any())).thenReturn(null);
+        BookChapter chapter = new BookChapter();
+        chapter.setChapterNum(5);
+        when(bookChapterService.getById(10L)).thenReturn(chapter);
+        CharacterRelationships edge = new CharacterRelationships();
+        edge.setBookId(1L);
+        edge.setFromCharacterId(1L);
+        edge.setToCharacterId(2L);
+        edge.setRelationshipType("师徒");
+        edge.setDescription("引路人");
+        edge.setIntensity(7);
+        when(characterRelationshipsService.listActive(1L, 5)).thenReturn(List.of(edge));
+
+        WriterContext context = service.assembleWriterContext(request(null), null);
+
+        assertTrue(context.getCharacterInfo().contains("当前生效角色关系（第5章）"));
+        assertTrue(context.getCharacterInfo().contains("主角 → 配角"));
+        assertTrue(context.getCharacterInfo().contains("师徒"));
+        assertTrue(context.getCharacterInfo().contains("[强度7]"));
     }
 
     // ------------------------------------------------------------------

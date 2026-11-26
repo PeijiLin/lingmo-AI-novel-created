@@ -15,11 +15,12 @@ import {
   createCharacterCard,
   deleteCharacterCard,
   listCharacterCards,
+  listCharacterRelationships,
   pageKnowledgeBase,
   updateCharacterCard,
   uploadKbContent,
 } from '@/api/knowledge'
-import type { CharacterCardVo } from '@/api/types'
+import type { CharacterCardVo, CharacterRelationship } from '@/api/types'
 
 const route = useRoute()
 const toast = useToast()
@@ -28,8 +29,16 @@ const bookId = Number(route.params.id)
 const characters = ref<CharacterCardVo[]>([])
 const loading = ref(false)
 const kbId = ref<number | null>(null)
+const relations = ref<CharacterRelationship[]>([])
 
 /* ---------------- 角色卡 ---------------- */
+
+interface RelationRow {
+  toCharacterId: number | null
+  relationshipType: string
+  description: string
+  intensity: string
+}
 
 interface CardForm {
   open: boolean
@@ -42,6 +51,7 @@ interface CardForm {
   background: string
   goals: string
   weaknesses: string
+  relationships: RelationRow[]
 }
 
 const emptyForm: Omit<CardForm, 'open' | 'id'> = {
@@ -53,16 +63,17 @@ const emptyForm: Omit<CardForm, 'open' | 'id'> = {
   background: '',
   goals: '',
   weaknesses: '',
+  relationships: [],
 }
 
 const editor = reactive<CardForm>({ open: false, id: 0, ...emptyForm })
 const saving = ref(false)
 
 function openCreate() {
-  Object.assign(editor, { open: true, id: 0 }, emptyForm)
+  Object.assign(editor, { open: true, id: 0 }, emptyForm, { relationships: [] })
 }
 
-function openEdit(card: CharacterCardVo) {
+async function openEdit(card: CharacterCardVo) {
   Object.assign(editor, {
     open: true,
     id: card.id ?? 0,
@@ -74,7 +85,38 @@ function openEdit(card: CharacterCardVo) {
     background: card.background ?? '',
     goals: card.goals ?? '',
     weaknesses: card.weaknesses ?? '',
+    relationships: [],
   })
+  try {
+    const all = await listCharacterRelationships(bookId)
+    editor.relationships = all
+      .filter((rel) => rel.fromCharacterId === card.id)
+      .map((rel) => ({
+        toCharacterId: rel.toCharacterId ?? null,
+        relationshipType: rel.relationshipType ?? rel.relationType ?? '',
+        description: rel.description ?? '',
+        intensity: rel.intensity == null ? '' : String(rel.intensity),
+      }))
+  } catch {
+    // 关系加载失败不阻塞卡片编辑
+  }
+}
+
+function addRelationship() {
+  editor.relationships.push({ toCharacterId: null, relationshipType: '', description: '', intensity: '' })
+}
+
+function removeRelationship(index: number) {
+  editor.relationships.splice(index, 1)
+}
+
+function relationsOf(card: CharacterCardVo) {
+  return relations.value.filter((rel) => rel.fromCharacterId === card.id)
+}
+
+function relationshipText(rel: CharacterRelationship) {
+  const target = characters.value.find((c) => c.id === rel.toCharacterId)
+  return `${target?.name ?? '角色'}（${rel.relationshipType ?? rel.relationType ?? '相关'}）`
 }
 
 function payload() {
@@ -87,6 +129,14 @@ function payload() {
     background: editor.background.trim() || undefined,
     goals: editor.goals.trim() || undefined,
     weaknesses: editor.weaknesses.trim() || undefined,
+    relationships: editor.relationships
+      .filter((rel) => rel.toCharacterId != null && rel.toCharacterId !== editor.id)
+      .map((rel) => ({
+        toCharacterId: Number(rel.toCharacterId),
+        relationshipType: rel.relationshipType.trim() || '相关',
+        description: rel.description.trim() || undefined,
+        intensity: rel.intensity ? Number(rel.intensity) : undefined,
+      })),
   }
 }
 
@@ -94,6 +144,11 @@ async function loadCharacters() {
   loading.value = true
   try {
     characters.value = (await listCharacterCards(bookId)) ?? []
+    try {
+      relations.value = (await listCharacterRelationships(bookId)) ?? []
+    } catch {
+      relations.value = []
+    }
   } catch (err) {
     toast.error('角色卡加载失败', err instanceof Error ? err.message : undefined)
   } finally {
@@ -228,6 +283,9 @@ onMounted(async () => {
             <p v-if="card.personality" class="text-xs text-ink-secondary"><span class="text-mist">性格：</span>{{ card.personality }}</p>
             <p v-if="card.goals" class="text-xs text-ink-secondary"><span class="text-mist">目标：</span>{{ card.goals }}</p>
             <p v-if="card.weaknesses" class="text-xs text-ink-secondary"><span class="text-mist">弱点：</span>{{ card.weaknesses }}</p>
+            <p v-if="relationsOf(card).length" class="text-xs text-ink-secondary">
+              <span class="text-mist">关系：</span>{{ relationsOf(card).slice(0, 2).map(relationshipText).join('、') }}
+            </p>
             <p v-if="card.background" class="line-clamp-2 text-xs leading-relaxed text-ink-secondary">
               <span class="text-mist">背景：</span>{{ card.background }}
             </p>
@@ -288,6 +346,41 @@ onMounted(async () => {
             <Input v-model="editor.weaknesses" placeholder="弱点" />
           </div>
         </label>
+        <div class="sm:col-span-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-ink-secondary">角色关系</span>
+            <button type="button" class="text-xs text-ink-secondary hover:text-ink" @click="addRelationship">
+              + 添加关系
+            </button>
+          </div>
+          <p v-if="characters.filter((c) => c.id !== editor.id).length === 0" class="mt-1 text-xs text-mist">
+            先建立另一个角色，才能设置关系。
+          </p>
+          <div
+            v-for="(rel, index) in editor.relationships"
+            :key="index"
+            class="mt-2 grid grid-cols-1 gap-2 rounded-md border border-mist-line/60 bg-paper-surface/60 p-2 sm:grid-cols-12"
+          >
+            <select
+              v-model="rel.toCharacterId"
+              class="h-9 w-full rounded-md border border-mist-line bg-paper-surface px-2 text-sm text-ink outline-none focus:ring-1 focus:ring-ink/20 sm:col-span-3"
+            >
+              <option :value="null">选择角色</option>
+              <option v-for="c in characters.filter((c) => c.id !== editor.id)" :key="c.id" :value="c.id">
+                {{ c.name }}
+              </option>
+            </select>
+            <Input v-model="rel.relationshipType" class="sm:col-span-3" placeholder="关系：师徒 / 宿敌" />
+            <Input v-model="rel.description" class="sm:col-span-4" placeholder="说明（可选）" />
+            <Input v-model="rel.intensity" class="sm:col-span-1" placeholder="强度" />
+            <button type="button" class="text-left text-xs text-cinnabar hover:underline sm:col-span-1" @click="removeRelationship(index)">
+              删除
+            </button>
+          </div>
+          <p class="mt-1 text-xs text-mist">
+            关系会写入正典账本，并按当前章注入 Writer / Critic；关系变化须由剧情推进，模型不得自行新增。
+          </p>
+        </div>
       </form>
       <template #footer>
         <Button variant="ghost" @click="editor.open = false">取消</Button>

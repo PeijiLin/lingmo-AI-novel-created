@@ -131,10 +131,24 @@ export interface KnowledgeBaseDto {
 
 export interface CharacterRelationship {
   id?: number
+  bookId?: number
+  /** 关系起点角色（character_cards.id） */
+  fromCharacterId?: number
+  /** 关系终点角色（character_cards.id） */
+  toCharacterId?: number
+  /** 关系类型：师徒 / 宿敌 / 亲属 … */
+  relationshipType?: string
+  description?: string
+  /** 生效起始章号（book_chapter.chapter_num 域；空 = 开边界） */
+  chapterFrom?: number
+  /** 失效章号（空 = 当前有效；与 chapterFrom 均空 = 长期有效） */
+  chapterTo?: number
+  /** 关系强度/张力 0-9 */
+  intensity?: number
+  /** 旧字段兼容（历史角色卡 JSON） */
   characterId?: number
   relatedCharacterId?: number
   relationType?: string
-  description?: string
 }
 
 export interface CharacterCardVo {

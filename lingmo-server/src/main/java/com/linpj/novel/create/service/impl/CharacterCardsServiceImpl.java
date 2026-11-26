@@ -4,16 +4,21 @@ import cn.hutool.core.bean.BeanUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.google.gson.reflect.TypeToken;
+import com.google.gson.reflect.TypeToken;
 import com.linpj.novel.create.exception.BusinessException;
 import com.linpj.novel.create.exception.ErrorCode;
 import com.linpj.novel.create.exception.ThrowsUtils;
 import com.linpj.novel.create.pojo.dto.CharacterCardsAddRequest;
 import com.linpj.novel.create.pojo.entity.CharacterCards;
+import com.linpj.novel.create.pojo.entity.CharacterRelationships;
 import com.linpj.novel.create.pojo.vo.CharacterCardsVo;
 import com.linpj.novel.create.service.CharacterCardsService;
+import com.linpj.novel.create.service.CharacterRelationshipsService;
 import com.linpj.novel.create.mapper.novel.CharacterCardsMapper;
 import com.linpj.novel.create.utils.JsonUtil;
 import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,10 +34,15 @@ import java.util.List;
 public class CharacterCardsServiceImpl extends ServiceImpl<CharacterCardsMapper, CharacterCards>
     implements CharacterCardsService {
 
-    private final CharacterCardsMapper characterCardsMapper;
+    private static final Logger log = LoggerFactory.getLogger(CharacterCardsServiceImpl.class);
 
-    public CharacterCardsServiceImpl(CharacterCardsMapper characterCardsMapper) {
+    private final CharacterCardsMapper characterCardsMapper;
+    private final CharacterRelationshipsService characterRelationshipsService;
+
+    public CharacterCardsServiceImpl(CharacterCardsMapper characterCardsMapper,
+                                     CharacterRelationshipsService characterRelationshipsService) {
         this.characterCardsMapper = characterCardsMapper;
+        this.characterRelationshipsService = characterRelationshipsService;
     }
 
     /**
@@ -56,6 +66,8 @@ public class CharacterCardsServiceImpl extends ServiceImpl<CharacterCardsMapper,
         System.out.println(characterCards);
         boolean save = this.save(characterCards);
 //        characterCardsMapper.save(characterCards);
+        // 关系边以角色卡为写入口：卡片保存后同步到 character_relationships（P0 关系进黑板的数据源）
+        characterRelationshipsService.replaceOutgoing(card.getBookId(), characterCards.getId(), card.getRelationships());
         return toVo(characterCards);
     }
 
@@ -73,6 +85,7 @@ public class CharacterCardsServiceImpl extends ServiceImpl<CharacterCardsMapper,
         }
         boolean b = this.updateById(updatedCard);
         ThrowsUtils.throwIf(!b, ErrorCode.SYSTEM_ERROR);
+        syncRelationships(characterCards.getBookId(), characterCards.getId(), updatedCard.getRelationships());
         return this.getById(updatedCard.getId());
     }
 
@@ -89,6 +102,8 @@ public class CharacterCardsServiceImpl extends ServiceImpl<CharacterCardsMapper,
         }
         boolean b = this.removeById(id);
         ThrowsUtils.throwIf(!b, ErrorCode.SYSTEM_ERROR);
+        // 角色删除时清理关系边，避免残留边把不存在的角色喂给模型
+        characterRelationshipsService.deleteByCharacter(characterCards.getBookId(), id);
     }
 
     /**
@@ -147,8 +162,25 @@ public class CharacterCardsServiceImpl extends ServiceImpl<CharacterCardsMapper,
         return list.stream().map(this::toVo).toList();
     }
 
-    private CharacterCardsVo toVo(CharacterCards characterCards) {
-        if (characterCards == null) {
+    /** 更新卡片时 relationships 可能是 JSON 字符串或数组；解析失败只告警，不阻塞卡片保存 */
+    private void syncRelationships(Long bookId, Long characterId, Object relationships) {
+        if (relationships == null) {
+            return;
+        }
+        try {
+            String json = relationships instanceof String s ? s : JsonUtil.toJson(relationships);
+            if (StringUtils.isBlank(json)) {
+                return;
+            }
+            List<CharacterRelationships> edges = JsonUtil.fromJson(json,
+                    new TypeToken<List<CharacterRelationships>>() { }.getType());
+            characterRelationshipsService.replaceOutgoing(bookId, characterId, edges);
+        } catch (Exception e) {
+            log.warn("角色关系同步失败（卡片已保存，关系未更新）: bookId={}, characterId={}", bookId, characterId, e);
+        }
+    }
+
+    private CharacterCardsVo toVo(CharacterCards characterCards) {        if (characterCards == null) {
             return null;
         }
         

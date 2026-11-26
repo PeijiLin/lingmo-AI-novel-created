@@ -7,6 +7,7 @@
 import { http } from '@/utils/http'
 import type {
   CharacterCardVo,
+  CharacterRelationship,
   KnowledgeBaseDto,
   KnowledgeBaseVo,
   Page,
@@ -80,4 +81,11 @@ export function updateCharacterCard(card: Partial<CharacterCardVo> & { id: numbe
 /** 删除角色卡 */
 export function deleteCharacterCard(id: number): Promise<boolean> {
   return http.delete<boolean>(`/api/character-card/${id}`)
+}
+
+/* ---------------- 角色关系 ---------------- */
+
+/** 本书全部关系边（含历史生效区间） */
+export function listCharacterRelationships(bookId: number): Promise<CharacterRelationship[]> {
+  return http.get<CharacterRelationship[]>(`/api/character-relationship/list/${bookId}`)
 }

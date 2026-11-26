@@ -1,21 +1,28 @@
 package com.linpj.novel.create.worldstate;
 
 import com.linpj.novel.create.pojo.dto.AiChatRequest;
+import com.linpj.novel.create.pojo.entity.BookChapter;
 import com.linpj.novel.create.pojo.entity.BookInfo;
+import com.linpj.novel.create.pojo.entity.CharacterRelationships;
 import com.linpj.novel.create.pojo.pipeline.ChapterOutline;
 import com.linpj.novel.create.pojo.pipeline.CriticContext;
 import com.linpj.novel.create.pojo.pipeline.PipelineRequest;
 import com.linpj.novel.create.pojo.pipeline.PlannerContext;
 import com.linpj.novel.create.pojo.pipeline.WriterContext;
 import com.linpj.novel.create.pojo.vo.CharacterCardsVo;
+import com.linpj.novel.create.service.BookChapterService;
 import com.linpj.novel.create.service.BookInfoService;
+import com.linpj.novel.create.service.CharacterRelationshipsService;
 import com.linpj.novel.create.service.CharacterStateService;
 import com.linpj.novel.create.service.CharacterCardsService;
 import com.linpj.novel.create.service.PlotThreadService;
 import com.linpj.novel.create.service.StoryDigestService;
 import org.springframework.stereotype.Service;
 
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 上下文组装服务（设计 5.2）：所有 Agent 的上下文统一从这里出，消灭"前端传 worldSetting"模式
@@ -50,17 +57,23 @@ public class ContextAssemblyService {
     private final StoryDigestService storyDigestService;
     private final PlotThreadService plotThreadService;
     private final CharacterStateService characterStateService;
+    private final CharacterRelationshipsService characterRelationshipsService;
+    private final BookChapterService bookChapterService;
 
     public ContextAssemblyService(CharacterCardsService characterCardsService,
                                   BookInfoService bookInfoService,
                                   StoryDigestService storyDigestService,
                                   PlotThreadService plotThreadService,
-                                  CharacterStateService characterStateService) {
+                                  CharacterStateService characterStateService,
+                                  CharacterRelationshipsService characterRelationshipsService,
+                                  BookChapterService bookChapterService) {
         this.characterCardsService = characterCardsService;
         this.bookInfoService = bookInfoService;
         this.storyDigestService = storyDigestService;
         this.plotThreadService = plotThreadService;
         this.characterStateService = characterStateService;
+        this.characterRelationshipsService = characterRelationshipsService;
+        this.bookChapterService = bookChapterService;
     }
 
     // ------------------------------------------------------------------
@@ -85,6 +98,9 @@ public class ContextAssemblyService {
         context.setStyle(request.getStyle());
         context.setStoryDigest(storyDigestService.getDigest(request.getBookId()));
         context.setCharacterInfo(loadCharacterInfo(request.getBookId(), castIds(outline)));
+        context.setCharacterInfo(prepend(
+                renderRelationships(request.getBookId(), request.getChapterId(), castIds(outline)),
+                context.getCharacterInfo()));
         context.setActivePlotThreads(plotThreadService.renderActiveThreads(request.getBookId()));
         appendCharacterStates(context, request.getBookId(), castIds(outline));
         trimToBudget(context);
@@ -102,6 +118,9 @@ public class ContextAssemblyService {
         context.setTitle(request.getTitle());
         context.setWorldSetting(resolveWorldSetting(request));
         context.setCharacterInfo(loadCharacterInfo(request.getBookId(), castIds(outline)));
+        context.setCharacterInfo(prepend(
+                renderRelationships(request.getBookId(), request.getChapterId(), castIds(outline)),
+                context.getCharacterInfo()));
         context.setStoryDigest(storyDigestService.getDigest(request.getBookId()));
         // meta 口径：Critic 审查"是否按排期兑付伏笔"需要知道排期（可见性矩阵 ✅）
         context.setActivePlotThreads(plotThreadService.renderPlannerThreads(
@@ -126,6 +145,9 @@ public class ContextAssemblyService {
         context.setTitle(request.getTitle());
         context.setWorldSetting(resolveWorldSetting(request));
         context.setCharacterInfo(loadCharacterInfo(request.getBookId(), null));
+        context.setCharacterInfo(prepend(
+                renderRelationships(request.getBookId(), request.getChapterId(), null),
+                context.getCharacterInfo()));
         context.setStoryDigest(storyDigestService.getDigest(request.getBookId()));
         // meta 口径：Planner 规划回收时点需要排期与逾期提醒（逾期回灌，B1-3/B1-8）
         context.setActivePlotThreads(plotThreadService.renderPlannerThreads(
@@ -188,6 +210,108 @@ public class ContextAssemblyService {
                         c.getId(), c.getName(), c.getDescription(), c.getPersonality(), c.getAppearance(),
                         c.getBackground(), c.getAbilities(), c.getWeaknesses(), c.getGoals()))
                 .reduce("", String::concat);
+    }
+
+    /** 关系块前置到角色信息头部：预算兜底截断保头时，关系不会被先裁掉 */
+    private static String prepend(String block, String body) {
+        if (block == null || block.isBlank()) {
+            return body;
+        }
+        return body == null || body.isBlank() ? block : block + "\n" + body;
+    }
+
+    /**
+     * 渲染当前生效的角色关系边（P0：让模型看到“谁和谁是什么关系”，减少称谓/立场幻觉）。
+     * 章号不可得时只注入长期有效边；出场角色过滤沿用大纲口径。
+     */
+    private String renderRelationships(Long bookId, Long chapterId, List<Long> castIds) {
+        if (bookId == null) {
+            return null;
+        }
+        Integer chapterNum = resolveChapterNum(chapterId);
+        List<CharacterRelationships> edges;
+        try {
+            edges = characterRelationshipsService.listActive(bookId, chapterNum);
+        } catch (Exception e) {
+            return null; // 关系通道故障：宁缺勿错，不阻塞创作
+        }
+        if (edges == null || edges.isEmpty()) {
+            return null;
+        }
+        if (castIds != null && !castIds.isEmpty()) {
+            edges = edges.stream()
+                    .filter(edge -> castIds.contains(edge.getFromCharacterId())
+                            || castIds.contains(edge.getToCharacterId()))
+                    .toList();
+        }
+        if (edges.isEmpty()) {
+            return null;
+        }
+        Map<Long, String> names = new LinkedHashMap<>();
+        try {
+            List<CharacterCardsVo> cards = characterCardsService.getCharacterCardsByProjectId(bookId);
+            if (cards != null) {
+                cards.stream().filter(c -> c.getId() != null && notBlank(c.getName()))
+                        .forEach(c -> names.put(c.getId(), c.getName()));
+            }
+        } catch (Exception e) {
+            // 角色名解析失败时退化为角色 ID，不影响关系语义
+        }
+        String header = chapterNum == null
+                ? "【长期有效角色关系】"
+                : "【当前生效角色关系（第" + chapterNum + "章）】";
+        List<CharacterRelationships> sorted = edges.stream()
+                .sorted(Comparator.comparing((CharacterRelationships e) -> nameOf(names, e.getFromCharacterId()))
+                        .thenComparing(e -> nameOf(names, e.getToCharacterId())))
+                .toList();
+        StringBuilder sb = new StringBuilder(header).append('\n');
+        for (CharacterRelationships edge : sorted) {
+            if (edge.getRelationshipType() == null || edge.getRelationshipType().isBlank()) {
+                continue;
+            }
+            sb.append("- ")
+                    .append(nameOf(names, edge.getFromCharacterId()))
+                    .append(" → ")
+                    .append(nameOf(names, edge.getToCharacterId()))
+                    .append("：")
+                    .append(edge.getRelationshipType());
+            if (notBlank(edge.getDescription())) {
+                sb.append("（").append(truncate(edge.getDescription(), 80)).append("）");
+            }
+            if (edge.getIntensity() != null) {
+                sb.append(" [强度").append(edge.getIntensity()).append(']');
+            }
+            sb.append('\n');
+        }
+        sb.append("（关系以此为准，不得自行新增或改写；关系变化须由剧情推进并由归档更新）\n");
+        return sb.toString();
+    }
+
+    private Integer resolveChapterNum(Long chapterId) {
+        if (chapterId == null) {
+            return null;
+        }
+        try {
+            BookChapter chapter = bookChapterService.getById(chapterId);
+            return chapter == null ? null : chapter.getChapterNum();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String nameOf(Map<Long, String> names, Long id) {
+        if (id == null) {
+            return "未知角色";
+        }
+        String name = names.get(id);
+        return name == null ? "角色#" + id : name;
+    }
+
+    private static String truncate(String text, int max) {
+        if (text == null || text.length() <= max) {
+            return text;
+        }
+        return text.substring(0, max) + "…";
     }
 
     /** 出场角色动态状态并入 characterInfo（角色卡静态设定 + character_state 当前态） */
