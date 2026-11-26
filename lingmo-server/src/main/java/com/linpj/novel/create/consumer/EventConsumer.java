@@ -2,15 +2,17 @@ package com.linpj.novel.create.consumer;
 
 import com.google.gson.reflect.TypeToken;
 import com.linpj.novel.create.pojo.entity.KnowledgeBase;
+import com.linpj.novel.create.pojo.entity.NovelKbSource;
 import com.linpj.novel.create.service.KnowledgeBaseService;
+import com.linpj.novel.create.service.ingest.EmbeddingIndexService;
+import com.linpj.novel.create.service.ingest.KbSourceService;
 import com.linpj.novel.create.utils.FileUtil;
 import com.linpj.novel.create.utils.JsonUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
+import org.springframework.ai.document.DocumentReader;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
-import org.springframework.ai.transformer.splitter.TokenTextSplitter;
-import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -22,10 +24,13 @@ import java.io.InputStream;
 import java.lang.reflect.Type;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Stream;
+import java.util.stream.Collectors;
 
 /**
  * 知识库文档上传消费者（document-upload）
+ *
+ * M2 重设计：走 ingest 统一入口（novel_kb_source + novel_rag_chunk + 向量投影），
+ * 不再直写 vector_store / knowledge_base.document_ids。
  *
  * 批量消费 + 手动确认模式（与 application.yml 的 listener.type: batch 对齐）。
  * 单条消息处理失败不阻塞批次：记录日志后继续，避免毒消息卡死队列。
@@ -39,18 +44,18 @@ public class EventConsumer {
 
     private static final Logger logger = LoggerFactory.getLogger(EventConsumer.class);
 
-    private final PgVectorStore pgVectorStore;
-
     private final KnowledgeBaseService knowledgeBaseService;
 
-    private final TokenTextSplitter tokenTextSplitter;
+    private final KbSourceService kbSourceService;
 
+    private final EmbeddingIndexService embeddingIndexService;
 
-    public EventConsumer(FileUtil fileUtil, PgVectorStore pgVectorStore, KnowledgeBaseService knowledgeBaseService) {
+    public EventConsumer(FileUtil fileUtil, KnowledgeBaseService knowledgeBaseService,
+                         KbSourceService kbSourceService, EmbeddingIndexService embeddingIndexService) {
         this.fileUtil = fileUtil;
-        this.pgVectorStore = pgVectorStore;
         this.knowledgeBaseService = knowledgeBaseService;
-        this.tokenTextSplitter = new TokenTextSplitter();
+        this.kbSourceService = kbSourceService;
+        this.embeddingIndexService = embeddingIndexService;
     }
 
     /**
@@ -94,12 +99,21 @@ public class EventConsumer {
         File tempFile = null;
         try {
             tempFile = File.createTempFile("upload_", "_" + objectName);
-            List<Document> documentList;
+            String content;
             try (InputStream inputStream = fileUtil.downloadByUrlAsStream(fileUrl)) {
-                documentList = getDocuments(inputStream, tempFile, knowledgeBaseId, objectName, knowledgeBase.getBookId());
+                content = extractText(inputStream, tempFile);
             }
-            logger.info("{} documents loaded and split from uploaded file", documentList.size());
-            dataInsert(knowledgeBaseId, documentList, documentList.stream());
+            if (content == null || content.isBlank()) {
+                logger.warn("文档内容为空或解析失败: file={}", fileUrl);
+                return;
+            }
+            NovelKbSource source = kbSourceService.upsertUpload(
+                    knowledgeBase.getBookId(), knowledgeBase.getUserId(), objectName, fileUrl);
+            int chunks = embeddingIndexService.indexSourceContent(
+                    knowledgeBase.getBookId(), source.getId(), content);
+            kbSourceService.markReady(source, chunks);
+            logger.info("文档素材入库: bookId={}, sourceId={}, file={}, chunks={}",
+                    knowledgeBase.getBookId(), source.getId(), objectName, chunks);
         } catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
@@ -109,20 +123,7 @@ public class EventConsumer {
         }
     }
 
-    private void dataInsert(Long knowledgeBaseId, List<Document> documentList, Stream<Document> stream) {
-        pgVectorStore.doAdd(documentList);
-        List<String> list = stream.map(Document::getId).toList();
-        KnowledgeBase knowledgeBase = new KnowledgeBase();
-        knowledgeBase.setId(knowledgeBaseId);
-        knowledgeBase.setDocumentIds(list);
-        boolean b = knowledgeBaseService.updateById(knowledgeBase);
-        if (!b) {
-            logger.error("知识库 documentIds 回写失败: knowledgeBaseId={}", knowledgeBaseId);
-        }
-    }
-
-    private List<Document> getDocuments(InputStream inputStream, File tempFile, Long knowledgeBaseId, String originalFilename, Long bookId) throws IOException {
-        // 将输入流内容写入临时文件
+    private String extractText(InputStream inputStream, File tempFile) throws IOException {
         try (FileOutputStream outputStream = new FileOutputStream(tempFile)) {
             byte[] buffer = new byte[4096];
             int bytesRead;
@@ -130,21 +131,10 @@ public class EventConsumer {
                 outputStream.write(buffer, 0, bytesRead);
             }
         }
-
-        // 使用正确的构造函数处理文件系统路径
-        TikaDocumentReader reader = new TikaDocumentReader("file:" + tempFile.getAbsolutePath());
-        List<Document> documentList = reader.get();
-        List<Document> documentsWithMetadata = documentList.stream()
-                .peek((document) -> {
-                    document.getMetadata().put("source", "uploaded_file");
-                    document.getMetadata().put("upload_time", System.currentTimeMillis());
-                    document.getMetadata().put("filename", originalFilename);
-                    document.getMetadata().put("knowledgeId", knowledgeBaseId);
-                    // 书级隔离键：检索按本次创作所属书籍过滤（必须为数值，避免过滤不命中）
-                    document.getMetadata().put("bookId", bookId);
-                })
-                .toList();
-        return tokenTextSplitter.split(documentsWithMetadata);
+        DocumentReader reader = new TikaDocumentReader("file:" + tempFile.getAbsolutePath());
+        List<Document> documents = reader.get();
+        return documents.stream()
+                .map(Document::getText)
+                .collect(Collectors.joining("\n\n"));
     }
-
 }

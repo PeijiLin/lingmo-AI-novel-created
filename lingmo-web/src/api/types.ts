@@ -129,6 +129,24 @@ export interface KnowledgeBaseDto {
   description?: string
 }
 
+/** 知识库素材来源（novel_kb_source） */
+export interface KbSourceVo {
+  id?: number
+  bookId?: number
+  userId?: number
+  name?: string
+  description?: string
+  /** UPLOAD / MANUAL / URL */
+  sourceKind?: string
+  fileName?: string
+  filePath?: string
+  checksum?: string
+  /** PARSING / READY / FAILED */
+  status?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
 export interface CharacterRelationship {
   id?: number
   bookId?: number

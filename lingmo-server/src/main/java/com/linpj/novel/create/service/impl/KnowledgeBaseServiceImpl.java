@@ -12,23 +12,16 @@ import com.linpj.novel.create.mapper.novel.KnowledgeBaseMapper;
 import com.linpj.novel.create.pojo.dto.KnowledgeBaseDto;
 import com.linpj.novel.create.pojo.dto.KnowledgeBasePageRequest;
 import com.linpj.novel.create.pojo.entity.KnowledgeBase;
+import com.linpj.novel.create.pojo.entity.NovelKbSource;
 import com.linpj.novel.create.pojo.vo.KnowledgeBaseVo;
 import com.linpj.novel.create.service.KnowledgeBaseService;
+import com.linpj.novel.create.service.ingest.EmbeddingIndexService;
+import com.linpj.novel.create.service.ingest.KbSourceService;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.document.DocumentReader;
-import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
-import org.springframework.web.multipart.MultipartFile;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
 import java.util.List;
 
 /**
@@ -38,6 +31,15 @@ import java.util.List;
 public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, KnowledgeBase>
         implements KnowledgeBaseService {
     private static final Logger logger = LoggerFactory.getLogger(KnowledgeBaseServiceImpl.class);
+
+    private final KbSourceService kbSourceService;
+    private final EmbeddingIndexService embeddingIndexService;
+
+    public KnowledgeBaseServiceImpl(KbSourceService kbSourceService,
+                                     EmbeddingIndexService embeddingIndexService) {
+        this.kbSourceService = kbSourceService;
+        this.embeddingIndexService = embeddingIndexService;
+    }
 
 //    /**
 //     * 使用的索引名称，用于标识 DashScope 中的向量存储空间。
@@ -197,5 +199,32 @@ public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, K
 //        List<Document> documentList = reader.get();
 //        return documentList;
 //    }
+
+    @Override
+    public List<NovelKbSource> listSources(Long bookId) {
+        ThrowsUtils.throwIf(bookId == null || bookId <= 0, ErrorCode.PARAMS_ERROR, "无效的书籍ID");
+        return kbSourceService.listByBook(bookId);
+    }
+
+    @Override
+    public void removeSource(Long sourceId) {
+        ThrowsUtils.throwIf(sourceId == null || sourceId <= 0, ErrorCode.PARAMS_ERROR, "无效的素材ID");
+        kbSourceService.deleteSource(sourceId);
+    }
+
+    @Override
+    public void removeKnowledgeBaseCascade(Long knowledgeBaseId) {
+        ThrowsUtils.throwIf(knowledgeBaseId == null || knowledgeBaseId <= 0,
+                ErrorCode.PARAMS_ERROR, "无效的知识库ID");
+        KnowledgeBase knowledgeBase = this.getById(knowledgeBaseId);
+        ThrowsUtils.throwIf(knowledgeBase == null, ErrorCode.NOT_FOUND_ERROR, "知识库不存在");
+        // 素材、块与向量以 bookId 为主域：知识库删除时同步清书，避免残留孤儿向量
+        for (NovelKbSource source : kbSourceService.listByBook(knowledgeBase.getBookId())) {
+            kbSourceService.deleteSource(source.getId());
+        }
+        embeddingIndexService.deleteBook(knowledgeBase.getBookId());
+        boolean removed = this.removeById(knowledgeBaseId);
+        ThrowsUtils.throwIf(!removed, ErrorCode.SYSTEM_ERROR);
+    }
 
 }

@@ -8,6 +8,7 @@ import { http } from '@/utils/http'
 import type {
   CharacterCardVo,
   CharacterRelationship,
+  KbSourceVo,
   KnowledgeBaseDto,
   KnowledgeBaseVo,
   Page,
@@ -47,6 +48,16 @@ export function uploadKbFile(knowledgeBaseId: number, file: File): Promise<unkno
 /** 上传文本内容入知识库 */
 export function uploadKbContent(knowledgeBaseId: number, content: string): Promise<unknown> {
   return http.post<unknown>('/customizeKnowledgeBase/upload/content', { knowledgeId: knowledgeBaseId, content })
+}
+
+/** 本书素材来源清单（novel_kb_source） */
+export function listKbSources(bookId: number): Promise<KbSourceVo[]> {
+  return http.get<KbSourceVo[]>(`/knowledgeBase/${bookId}/sources`)
+}
+
+/** 删除单个素材（级联清文本块与向量） */
+export function removeKbSource(id: number): Promise<void> {
+  return http.post<void>('/knowledgeBase/source/remove', { id })
 }
 
 /* ---------------- 角色卡 ---------------- */

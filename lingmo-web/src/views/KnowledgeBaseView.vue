@@ -16,11 +16,13 @@ import {
   deleteCharacterCard,
   listCharacterCards,
   listCharacterRelationships,
+  listKbSources,
   pageKnowledgeBase,
+  removeKbSource,
   updateCharacterCard,
   uploadKbContent,
 } from '@/api/knowledge'
-import type { CharacterCardVo, CharacterRelationship } from '@/api/types'
+import type { CharacterCardVo, CharacterRelationship, KbSourceVo } from '@/api/types'
 
 const route = useRoute()
 const toast = useToast()
@@ -193,6 +195,39 @@ async function removeCard(id: number) {
 
 const material = ref('')
 const uploading = ref(false)
+const sources = ref<KbSourceVo[]>([])
+
+async function loadSources() {
+  try {
+    sources.value = (await listKbSources(bookId)) ?? []
+  } catch {
+    sources.value = []
+  }
+}
+
+async function removeSource(source: KbSourceVo) {
+  if (!source.id) return
+  try {
+    await removeKbSource(source.id)
+    toast.success('素材已删除（文本块与向量同步清理）')
+    await loadSources()
+  } catch (err) {
+    toast.error('删除失败', err instanceof Error ? err.message : undefined)
+  }
+}
+
+function kindText(kind?: string) {
+  if (kind === 'UPLOAD') return '文件'
+  if (kind === 'URL') return '链接'
+  return '文本'
+}
+
+function statusText(status?: string) {
+  if (status === 'READY') return '已入库'
+  if (status === 'FAILED') return '解析失败'
+  if (status === 'PARSING') return '解析中'
+  return status ?? '-'
+}
 
 async function ensureKb(): Promise<number | null> {
   if (kbId.value) return kbId.value
@@ -226,6 +261,7 @@ async function submitMaterial() {
     await uploadKbContent(id, text)
     toast.success('素材已入库')
     material.value = ''
+    await loadSources()
   } catch (err) {
     toast.error('上传失败', explainAiError(err) ?? (err instanceof Error ? err.message : undefined))
   } finally {
@@ -236,6 +272,7 @@ async function submitMaterial() {
 onMounted(async () => {
   await loadCharacters()
   await ensureKb()
+  await loadSources()
 })
 </script>
 
@@ -302,6 +339,36 @@ onMounted(async () => {
         <div class="mt-2 flex justify-end">
           <Button variant="outline" size="sm" :loading="uploading" @click="submitMaterial">入库</Button>
         </div>
+      </div>
+
+      <!-- 素材清单（novel_kb_source）：文本块与向量的权威来源 -->
+      <div v-if="sources.length" class="mt-4">
+        <p class="mb-2 text-xs text-ink-secondary">
+          已入库素材 {{ sources.length }} 条；删除素材会同步清理其文本块与检索向量。
+        </p>
+        <ul class="divide-y divide-mist-line/60 rounded-lg border border-mist-line bg-paper-surface">
+          <li
+            v-for="source in sources"
+            :key="source.id"
+            class="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+          >
+            <div class="min-w-0">
+              <p class="truncate text-ink">{{ source.name }}</p>
+              <p class="mt-0.5 text-xs text-mist">
+                {{ kindText(source.sourceKind) }} · {{ statusText(source.status) }}
+                <template v-if="source.createdAt"> · {{ source.createdAt.slice(0, 10) }}</template>
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              :aria-label="`删除素材 ${source.name}`"
+              @click="removeSource(source)"
+            >
+              <Trash class="size-3.5 text-cinnabar" />
+            </Button>
+          </li>
+        </ul>
       </div>
     </section>
 
