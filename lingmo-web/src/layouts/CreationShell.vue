@@ -23,10 +23,12 @@ const emit = defineEmits<{
     <header class="flex h-12 shrink-0 items-center gap-3 border-b border-mist-line bg-paper-surface px-3 sm:px-4">
       <button
         type="button"
-        class="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs text-ink-secondary transition-colors hover:bg-paper hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-indigo/40"
+        class="inline-flex shrink-0 items-center gap-1 rounded-sm px-2 py-1 text-xs text-ink-secondary transition-colors hover:bg-paper hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-indigo/40"
+        aria-label="返回工作台"
         @click="emit('back')"
       >
-        ← 工作台
+        <span aria-hidden="true">←</span>
+        <span class="hidden sm:inline">工作台</span>
       </button>
       <div class="min-w-0 flex-1">
         <slot name="title">

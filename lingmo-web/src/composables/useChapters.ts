@@ -61,7 +61,14 @@ export function useChapters(bookId: number) {
         }
       }
       if (currentChapter.value?.id === payload.id) {
-        currentChapter.value = { ...currentChapter.value, title: payload.title, wordCount: payload.wordCount }
+        // 必须带上 content：CreatorView 监听 currentChapter 并调用 setDoc，
+        // 若这里丢了 content，保存后稿纸会被空文档覆盖。
+        currentChapter.value = {
+          ...currentChapter.value,
+          title: payload.title,
+          wordCount: payload.wordCount,
+          content: payload.content,
+        }
       }
     } finally {
       saving.value = false

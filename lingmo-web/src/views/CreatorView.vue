@@ -7,7 +7,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Sparkles, Save, Send, History, ShieldCheck } from 'lucide-vue-next'
+import { Sparkles, Save, Send, History, ShieldCheck, ListTree } from 'lucide-vue-next'
 import CreationShell from '@/layouts/CreationShell.vue'
 import { Button, Dialog, Input, Sheet } from '@/components/ui'
 import ChapterTree from '@/components/base/ChapterTree.vue'
@@ -335,6 +335,7 @@ const activeNotes = computed(() => ai.notes.filter((n) => n.status !== 'dismisse
 /* ---------------- 流水线抽屉与运行详情 ---------------- */
 
 const pipelineSheetOpen = ref(false)
+const chapterSheetOpen = ref(false)
 const runInspectorOpen = ref(false)
 </script>
 
@@ -351,24 +352,31 @@ const runInspectorOpen = ref(false)
     </template>
 
     <template #actions>
-      <!-- 人审队列：Sheet 内处理，不卸载稿纸 -->
-      <Button variant="outline" size="sm" aria-label="人审队列" @click="reviewSheetOpen = true">
-        <ShieldCheck class="size-3.5 text-cinnabar" />
-        <span class="hidden sm:inline">人审{{ pendingReviewCount ? ` ${pendingReviewCount}` : '' }}</span>
-      </Button>
-      <!-- 窄屏：唤起流水线抽屉 -->
-      <Button variant="outline" size="sm" class="xl:hidden" @click="pipelineSheetOpen = true">
-        <Sparkles class="size-3.5 text-cinnabar" />
-        流水线
-      </Button>
-      <Button variant="outline" size="sm" :loading="saving" @click="handleSave">
-        <Save class="size-3.5" />
-        保存草稿
-      </Button>
-      <Button variant="cinnabar" size="sm" :loading="publishing" @click="handlePublish">
-        <Send class="size-3.5" />
-        发布
-      </Button>
+      <div class="ml-auto flex shrink-0 items-center gap-1">
+        <!-- 窄屏：章节树抽屉（顶栏空间有限，按钮只留图标） -->
+        <Button variant="ghost" size="sm" class="md:hidden" aria-label="章节目录" @click="chapterSheetOpen = true">
+          <ListTree class="size-3.5" />
+          <span class="hidden sm:inline">章节</span>
+        </Button>
+        <!-- 人审队列：Sheet 内处理，不卸载稿纸 -->
+        <Button variant="outline" size="sm" aria-label="人审队列" @click="reviewSheetOpen = true">
+          <ShieldCheck class="size-3.5 text-cinnabar" />
+          <span class="hidden sm:inline">人审{{ pendingReviewCount ? ` ${pendingReviewCount}` : '' }}</span>
+        </Button>
+        <!-- 窄屏：唤起流水线抽屉 -->
+        <Button variant="outline" size="sm" class="xl:hidden" aria-label="AI 流水线" @click="pipelineSheetOpen = true">
+          <Sparkles class="size-3.5 text-cinnabar" />
+          <span class="hidden sm:inline">流水线</span>
+        </Button>
+        <Button variant="outline" size="sm" aria-label="保存草稿" :loading="saving" @click="handleSave">
+          <Save class="size-3.5" />
+          <span class="hidden sm:inline">保存草稿</span>
+        </Button>
+        <Button variant="cinnabar" size="sm" aria-label="发布" :loading="publishing" @click="handlePublish">
+          <Send class="size-3.5" />
+          <span class="hidden sm:inline">发布</span>
+        </Button>
+      </div>
     </template>
 
     <template #left>
@@ -466,9 +474,21 @@ const runInspectorOpen = ref(false)
     </section>
   </Sheet>
 
-  <!-- 人审抽屉：保留稿纸编辑态 -->
-  <ReviewSheet v-model:open="reviewSheetOpen" :book-id="bookId" />
+  <!-- 窄屏：章节目录抽屉（宽屏由 CreationShell 左栏直接展示） -->
+  <Sheet v-model:open="chapterSheetOpen" title="章节目录" width-class="w-[min(92vw,22rem)]">
+    <ChapterTree
+      :chapters="chapters.chapters.value"
+      :current-id="currentChapter?.id"
+      :loading="chapters.loading.value"
+      @select="(chapter) => { chapters.select(chapter); chapterSheetOpen = false }"
+      @create="handleCreateChapter"
+      @rename="openRename"
+    />
+  </Sheet>
 
   <!-- 运行详情：节点与阶段产物概览 -->
   <PipelineRunInspector v-model:open="runInspectorOpen" :run-id="ai.state.taskId" />
+
+  <!-- 人审抽屉：保留稿纸编辑态 -->
+  <ReviewSheet v-model:open="reviewSheetOpen" :book-id="bookId" />
 </template>

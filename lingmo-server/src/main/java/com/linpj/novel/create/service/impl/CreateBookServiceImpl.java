@@ -19,7 +19,6 @@ import com.linpj.novel.create.service.BookInfoService;
 import com.linpj.novel.create.service.CreateBookService;
 import com.linpj.novel.create.mapper.novel.CreateBookMapper;
 import com.linpj.novel.create.producer.CreationEventProducer;
-import com.linpj.novel.create.utils.CommonHandle;
 import com.linpj.novel.create.utils.JsonUtil;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
@@ -55,12 +54,18 @@ public class CreateBookServiceImpl extends ServiceImpl<CreateBookMapper, CreateB
      */
     @Override
     public Page<CreateBookVo> createBookPageByBookId(CreateBookPageRequest createBookPageRequest) {
-        ThrowsUtils.throwIf(CommonHandle.isReptile(createBookPageRequest.getPageSize()), ErrorCode.REPTILE_ERROR);
         Long bookId = createBookPageRequest.getBookId();
+        Integer pageNum = createBookPageRequest.getPageNum();
+        Integer pageSize = createBookPageRequest.getPageSize();
+        // 创作台按 bookId 一次性拉取完整章节树（前端 pageSize=200）。
+        // 该接口已鉴权且限定单本作品，不再套用公开列表页的反爬阈值（pageSize > 50），
+        // 否则合法章节列表会返回 40001「爬虫异常」。仅保留硬上限防止异常大分页。
+        ThrowsUtils.throwIf(pageNum == null || pageNum <= 0 || pageSize == null || pageSize <= 0 || pageSize > 1000,
+                ErrorCode.PARAMS_ERROR, "分页参数非法");
         if (bookId == null || bookId <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
-        Page<CreateBook> page = new Page<>(createBookPageRequest.getPageNum(), createBookPageRequest.getPageSize());
+        Page<CreateBook> page = new Page<>(pageNum, pageSize);
         LambdaQueryWrapper<CreateBook> wrapper = new LambdaQueryWrapper<CreateBook>().eq(CreateBook::getBookId, bookId).orderBy(true, createBookPageRequest.getSort(), CreateBook::getPublishedTime);
         Page<CreateBook> createBookPage = this.page(page, wrapper);
         Page<CreateBookVo> bookVoPage = new Page<>();

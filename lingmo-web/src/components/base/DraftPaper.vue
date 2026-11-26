@@ -99,6 +99,21 @@ function countWordsOf(target: Editor | undefined): number {
   return target.storage.characterCount?.characters?.() ?? 0
 }
 
+/**
+ * Tiptap 3.11 的 EditorContent 在挂载时检查 `editor.view.dom.firstChild`，
+ * 空文档（无段落节点）会被判定为无内容而跳过挂载，且之后不会重试——
+ * 表现就是稿纸永远空白。因此所有文档入口都保证至少有一个空段落。
+ */
+function normalizeDoc(doc: unknown): JSONContent {
+  if (doc && typeof doc === 'object') {
+    const candidate = doc as JSONContent
+    if (candidate.type === 'doc' && Array.isArray(candidate.content) && candidate.content.length > 0) {
+      return candidate
+    }
+  }
+  return { type: 'doc', content: [{ type: 'paragraph' }] }
+}
+
 const editor = useEditor({
   extensions: [
     StarterKit,
@@ -106,14 +121,15 @@ const editor = useEditor({
     CharacterCount,
     VermilionAnchor,
   ],
-  content: { type: 'doc', content: [] },
+  content: normalizeDoc(undefined),
   editorProps: {
     attributes: {
       class: 'draft-paper-prose focus:outline-none',
     },
   },
   onUpdate({ editor }) {
-    emit('word-count-change', countWordsOf(editor))
+    wordCount.value = countWordsOf(editor)
+    emit('word-count-change', wordCount.value)
     scheduleRecompute()
   },
   onSelectionUpdate({ editor }) {
@@ -127,25 +143,27 @@ const editor = useEditor({
   },
 })
 
-const wordCount = computed(() => countWordsOf(editor.value))
+// useEditor 返回 shallowRef，事务不会自动触发 Vue 响应式；
+// 字数必须在 onUpdate / setDoc 中显式写入 ref，否则工具栏会一直显示 0 字。
+const wordCount = ref(0)
 
 /* ---------------- 对外方法 ---------------- */
 
 function setDoc(doc: JSONContent | unknown) {
   if (!editor.value) return
-  let content: JSONContent = { type: 'doc', content: [] }
-  if (doc && typeof doc === 'object') {
-    content = doc as JSONContent
-  } else if (typeof doc === 'string' && doc.trim()) {
+  let parsed: unknown = doc
+  if (typeof doc === 'string' && doc.trim()) {
     try {
-      content = JSON.parse(doc) as JSONContent
+      parsed = JSON.parse(doc)
     } catch {
-      content = textToTiptapDoc(doc)
+      parsed = textToTiptapDoc(doc)
     }
   }
+  const content = normalizeDoc(parsed)
   editor.value.commands.setContent(content, { emitUpdate: false })
   nextTick(() => {
-    emit('word-count-change', countWordsOf(editor.value))
+    wordCount.value = countWordsOf(editor.value)
+    emit('word-count-change', wordCount.value)
     syncAnchors()
     scheduleRecompute()
   })
