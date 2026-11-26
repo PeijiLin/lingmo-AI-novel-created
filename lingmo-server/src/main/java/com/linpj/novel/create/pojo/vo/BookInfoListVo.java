@@ -16,9 +16,9 @@ public class BookInfoListVo implements Serializable {
     private Long id;
 
     /**
-     * 0-男频 1-女频
+     * 作品方向（男频 / 女频 / 自定义）
      */
-    private Integer workDirection;
+    private String workDirection;
 
     /**
      * 分类ID

@@ -17,7 +17,7 @@ export function pageBooks(req: BookPageRequest): Promise<Page<BookInfoVo>> {
   return http.post<Page<BookInfoVo>>('/book/page', req)
 }
 
-/** 小说类型（男频/女频 → 分类列表） */
+/** 小说类型（作品方向 → 分类列表） */
 export function listCategories(): Promise<Record<string, BookCategoryVo[]>> {
   return http.get<Record<string, BookCategoryVo[]>>('/book/category/list')
 }
@@ -49,7 +49,7 @@ export function getBookInfo(bookId: number): Promise<BookInfoVo> {
 export function createBook(payload: {
   bookName: string
   bookDesc?: string
-  workDirection?: number
+  workDirection?: string | null
   authorId?: number
 }): Promise<BookInfoVo> {
   return http.post<BookInfoVo>('/book/create', payload)

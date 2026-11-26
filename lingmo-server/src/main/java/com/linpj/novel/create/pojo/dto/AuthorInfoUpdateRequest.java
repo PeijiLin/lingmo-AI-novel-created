@@ -17,9 +17,9 @@ public class AuthorInfoUpdateRequest implements Serializable {
     private String penName;
 
     /**
-     * 0-男频 1-女频（可空）
+     * 创作方向（男频 / 女频 / 自定义，可空）
      */
-    private Integer workDirection;
+    private String workDirection;
 
     /**
      * 电子邮箱（可空）

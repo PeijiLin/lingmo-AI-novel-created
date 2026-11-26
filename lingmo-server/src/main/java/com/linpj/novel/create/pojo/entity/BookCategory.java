@@ -23,9 +23,9 @@ public class BookCategory implements Serializable {
     private Long id;
 
     /**
-     * 作品方向 0-男频 1-女频
+     * 作品方向（男频 / 女频 / 自定义，如自由文本）
      */
-    private Integer workDirection;
+    private String workDirection;
 
     /**
      * 名称

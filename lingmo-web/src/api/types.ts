@@ -30,7 +30,7 @@ export interface LoginResult {
 
 export interface BookInfoVo {
   id?: number
-  workDirection?: number
+  workDirection?: string
   categoryId?: number
   categoryName?: string
   picUrl?: string
@@ -54,14 +54,14 @@ export interface BookInfoVo {
 export interface BookCategoryVo {
   id?: number
   categoryName?: string
-  workDirection?: number
+  workDirection?: string
 }
 
 export interface BookPageRequest {
   pageNum?: number
   pageSize?: number
   categoryId?: number
-  workDirection?: number
+  workDirection?: string
 }
 
 export interface ChapterPageRequest {
@@ -219,8 +219,8 @@ export interface UserProfileUpdateRequest {
 export interface AuthorProfileVo {
   id?: number
   penName?: string
-  /** 0-男频 1-女频，未设置为 null */
-  workDirection?: number | null
+  /** 创作方向（男频 / 女频 / 自定义文本），未设置为 null */
+  workDirection?: string | null
   email?: string | null
   telPhone?: string | null
   chatAccount?: string | null
@@ -231,7 +231,7 @@ export interface AuthorProfileVo {
 export interface AuthorProfileUpdateRequest {
   /** 笔名必填（1-20 字） */
   penName: string
-  workDirection?: number | null
+  workDirection?: string | null
   email?: string | null
   telPhone?: string | null
   chatAccount?: string | null

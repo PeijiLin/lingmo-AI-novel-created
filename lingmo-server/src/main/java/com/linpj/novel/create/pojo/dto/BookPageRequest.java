@@ -10,9 +10,9 @@ import java.io.Serializable;
 @Getter
 public class BookPageRequest extends PageRequest implements Serializable {
     /**
-     * 0-男频 1-女频
+     * 作品方向（男频 / 女频 / 自定义）
      */
-    private Integer workDirection;
+    private String workDirection;
 
     /**
      * 分类ID

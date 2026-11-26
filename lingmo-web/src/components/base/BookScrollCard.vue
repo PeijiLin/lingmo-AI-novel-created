@@ -25,6 +25,7 @@ const hasCover = computed(() => !!props.book.picUrl)
 
 const metaParts = computed(() => {
   const parts: string[] = []
+  if (props.book.workDirection?.trim()) parts.push(props.book.workDirection.trim())
   if (props.book.categoryName) parts.push(props.book.categoryName)
   if (props.book.wordCount) parts.push(`${props.book.wordCount} 字`)
   if (props.book.bookStatus === 1) parts.push('已完结')

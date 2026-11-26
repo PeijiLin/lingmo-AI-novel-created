@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS author_info (
     tel_phone      VARCHAR(30),
     chat_account   VARCHAR(64),
     email          VARCHAR(100),
-    work_direction SMALLINT    DEFAULT 0,      -- 0-男频 1-女频
+    work_direction VARCHAR(20) DEFAULT '男频',  -- 男频 / 女频 / 自定义（自由文本）
     status         SMALLINT    DEFAULT 0,      -- 0-正常 1-封禁
     create_time    TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time    TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS author_info (
 -- ---------------------------------------------------------------- 书籍 / 分类 / 章节
 CREATE TABLE IF NOT EXISTS book_category (
     id             BIGSERIAL PRIMARY KEY,
-    work_direction SMALLINT    NOT NULL DEFAULT 0,
+    work_direction VARCHAR(20)   NOT NULL DEFAULT '男频',
     name           VARCHAR(100) NOT NULL,
     sort           SMALLINT    DEFAULT 0,
     create_time    TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS book_category (
 
 CREATE TABLE IF NOT EXISTS book_info (
     id                     BIGSERIAL PRIMARY KEY,
-    work_direction         SMALLINT     DEFAULT 0,
+    work_direction         VARCHAR(20)     DEFAULT '男频',
     category_id            BIGINT,
     category_name          VARCHAR(100),
     pic_url                VARCHAR(512),
@@ -139,8 +139,8 @@ CREATE INDEX IF NOT EXISTS idx_user_bookshelf_user ON user_bookshelf(user_id);
 
 -- ---------------------------------------------------------------- 基础分类数据
 INSERT INTO book_category (work_direction, name, sort) VALUES
-    (0, '玄幻', 1), (0, '都市', 2), (0, '仙侠', 3), (0, '科幻', 4), (0, '历史', 5),
-    (1, '古代言情', 1), (1, '现代言情', 2), (1, '穿越奇情', 3), (1, '宫斗宅斗', 4)
+    ('男频', '玄幻', 1), ('男频', '都市', 2), ('男频', '仙侠', 3), ('男频', '科幻', 4), ('男频', '历史', 5),
+    ('女频', '古代言情', 1), ('女频', '现代言情', 2), ('女频', '穿越奇情', 3), ('女频', '宫斗宅斗', 4)
 ON CONFLICT (work_direction, name) DO NOTHING;
 
 -- =============================================================================

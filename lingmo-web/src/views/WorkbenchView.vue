@@ -7,7 +7,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Feather, Plus, RefreshCw } from 'lucide-vue-next'
 import AppShell from '@/layouts/AppShell.vue'
-import { Button, Card, Dialog, Input, Select, Textarea, Skeleton } from '@/components/ui'
+import { Button, Card, Combobox, Dialog, Input, Textarea, Skeleton } from '@/components/ui'
 import BookScrollCard from '@/components/base/BookScrollCard.vue'
 import { useToast } from '@/composables/useToast'
 import { useAuth } from '@/composables/useAuth'
@@ -28,7 +28,7 @@ const createOpen = ref(false)
 const createForm = reactive({
   bookName: '',
   bookDesc: '',
-  workDirection: '0',
+  workDirection: '',
 })
 
 async function loadBooks() {
@@ -57,7 +57,7 @@ async function handleCreate() {
     const book = await createBook({
       bookName: name,
       bookDesc: createForm.bookDesc.trim(),
-      workDirection: Number(createForm.workDirection),
+      workDirection: createForm.workDirection.trim() || null,
     })
     toast.success('作品已创建，进入创作台')
     createOpen.value = false
@@ -154,13 +154,15 @@ function openCreator(book: BookInfoVo) {
         </label>
         <label class="block">
           <span class="mb-1.5 block text-xs font-medium text-ink">作品方向</span>
-          <Select
+          <Combobox
             v-model="createForm.workDirection"
             :options="[
-              { label: '男频', value: '0' },
-              { label: '女频', value: '1' },
+              { label: '男频', value: '男频' },
+              { label: '女频', value: '女频' },
+              { label: '无特定方向', value: '无特定方向' },
             ]"
-            width-class="w-36"
+            placeholder="选择或输入自定义方向（可留空）"
+            maxlength="20"
           />
         </label>
         <label class="block">

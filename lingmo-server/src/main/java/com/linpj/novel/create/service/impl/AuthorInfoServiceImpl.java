@@ -71,8 +71,9 @@ public class AuthorInfoServiceImpl extends ServiceImpl<AuthorInfoMapper, AuthorI
         String penName = request.getPenName().trim();
         ThrowsUtils.throwIf(penName.length() < 1 || penName.length() > 20, ErrorCode.PARAMS_ERROR, "笔名长度须为 1-20 字");
         if (request.getWorkDirection() != null) {
-            ThrowsUtils.throwIf(request.getWorkDirection() != 0 && request.getWorkDirection() != 1,
-                    ErrorCode.PARAMS_ERROR, "创作方向取值仅支持 0-男频 / 1-女频");
+            String direction = request.getWorkDirection().trim();
+            ThrowsUtils.throwIf(direction.length() > 20, ErrorCode.PARAMS_ERROR, "创作方向长度不能超过 20 字");
+            request.setWorkDirection(direction);
         }
 
         // upsert：无档案则开档，有档案则覆写可编辑字段

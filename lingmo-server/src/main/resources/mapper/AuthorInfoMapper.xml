@@ -12,7 +12,7 @@
             <result property="telPhone" column="tel_phone" jdbcType="VARCHAR"/>
             <result property="chatAccount" column="chat_account" jdbcType="VARCHAR"/>
             <result property="email" column="email" jdbcType="VARCHAR"/>
-            <result property="workDirection" column="work_direction" jdbcType="SMALLINT"/>
+            <result property="workDirection" column="work_direction" jdbcType="VARCHAR"/>
             <result property="status" column="status" jdbcType="SMALLINT"/>
             <result property="createTime" column="create_time" jdbcType="TIMESTAMP"/>
             <result property="updateTime" column="update_time" jdbcType="TIMESTAMP"/>

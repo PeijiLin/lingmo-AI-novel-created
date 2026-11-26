@@ -80,7 +80,8 @@ function rankColor(i: number) {
             <span class="min-w-0 flex-1">
               <span class="block truncate font-book text-sm font-semibold text-ink">{{ book.bookName }}</span>
               <span class="block truncate text-[11px] text-ink-secondary">
-                {{ book.authorName || '佚名' }}{{ book.categoryName ? ` · ${book.categoryName}` : '' }}
+                {{ book.authorName || '佚名' }}
+                {{ book.workDirection?.trim() ? ` · ${book.workDirection.trim()}` : '' }}{{ book.categoryName ? ` · ${book.categoryName}` : '' }}
               </span>
             </span>
             <span class="shrink-0 text-right">

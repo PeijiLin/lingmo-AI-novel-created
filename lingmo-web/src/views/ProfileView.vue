@@ -19,7 +19,7 @@ import {
   Ticket,
 } from 'lucide-vue-next'
 import AppShell from '@/layouts/AppShell.vue'
-import { Badge, Button, Card, Dialog, Input, Select, Skeleton } from '@/components/ui'
+import { Badge, Button, Card, Combobox, Dialog, Input, Skeleton } from '@/components/ui'
 import { useToast } from '@/composables/useToast'
 import { useAuth } from '@/composables/useAuth'
 import { listAuthorBooks } from '@/api/books'
@@ -48,7 +48,7 @@ const sexText = computed(() =>
   profile.value?.userSex === 0 ? '男' : profile.value?.userSex === 1 ? '女' : '性别未设',
 )
 const directionText = computed(() =>
-  author.value?.workDirection === 0 ? '男频' : author.value?.workDirection === 1 ? '女频' : '方向未设',
+  author.value?.workDirection?.trim() || '方向未设',
 )
 
 /** 在读数：与阅读器约定的本地进度账本（novel_read_progress） */
@@ -152,10 +152,7 @@ const creatingAuthor = computed(() => !author.value)
 
 function openAuthorEdit() {
   authorForm.penName = author.value?.penName ?? profile.value?.username ?? ''
-  authorForm.workDirection =
-    author.value?.workDirection === 0 || author.value?.workDirection === 1
-      ? String(author.value.workDirection)
-      : ''
+  authorForm.workDirection = author.value?.workDirection?.trim() ?? ''
   authorForm.email = author.value?.email ?? ''
   authorForm.telPhone = author.value?.telPhone ?? ''
   authorForm.chatAccount = author.value?.chatAccount ?? ''
@@ -174,7 +171,7 @@ async function saveAuthor() {
     // 后端 upsert：无档案自动开档；空串字段会清空为 null
     author.value = await updateMyAuthorProfile({
       penName,
-      workDirection: authorForm.workDirection === '' ? null : Number(authorForm.workDirection),
+      workDirection: authorForm.workDirection.trim() || null,
       email: authorForm.email.trim() || null,
       telPhone: authorForm.telPhone.trim() || null,
       chatAccount: authorForm.chatAccount.trim() || null,
@@ -316,7 +313,7 @@ async function copyInvite(code?: string | null) {
           <!-- 笔名行 -->
           <div class="flex flex-wrap items-center gap-3 border-b border-mist-line pb-4">
             <span class="font-book text-2xl font-semibold text-ink">{{ author.penName || '未署笔名' }}</span>
-            <Badge :variant="author.workDirection === 0 || author.workDirection === 1 ? 'default' : 'mist'">
+            <Badge :variant="author.workDirection?.trim() ? 'default' : 'mist'">
               {{ directionText }}
             </Badge>
             <span class="text-[11px] text-mist">开档于 {{ formatDate(author.createTime) }}</span>
@@ -430,14 +427,15 @@ async function copyInvite(code?: string | null) {
         </label>
         <label class="block">
           <span class="mb-1.5 block text-xs font-medium text-ink">创作方向</span>
-          <Select
+          <Combobox
             v-model="authorForm.workDirection"
             :options="[
-              { label: '男频', value: '0' },
-              { label: '女频', value: '1' },
+              { label: '男频', value: '男频' },
+              { label: '女频', value: '女频' },
+              { label: '无特定方向', value: '无特定方向' },
             ]"
-            placeholder="未设置"
-            width-class="w-36"
+            placeholder="选择或输入自定义方向（可留空）"
+            maxlength="20"
           />
         </label>
         <div class="grid gap-4 sm:grid-cols-2">

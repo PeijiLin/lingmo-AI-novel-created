@@ -22,9 +22,9 @@ public class BookCreateRequest implements Serializable {
     private String bookDesc;
 
     /**
-     * 作品方向 0-男频 1-女频
+     * 作品方向（男频 / 女频 / 自定义，如自由文本）
      */
-    private Integer workDirection;
+    private String workDirection;
 
     /**
      * 作者ID（可选：缺省时由服务端从当前登录用户自动关联/创建作者）

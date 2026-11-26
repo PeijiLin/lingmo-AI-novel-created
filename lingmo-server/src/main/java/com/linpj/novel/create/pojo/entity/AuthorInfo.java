@@ -52,9 +52,9 @@ public class AuthorInfo implements Serializable {
     private String email;
 
     /**
-     * 0-男频 1-女频
+     * 创作方向（男频 / 女频 / 自定义，如自由文本）
      */
-    private Integer workDirection;
+    private String workDirection;
 
     /**
      * 0-正常 1-封禁

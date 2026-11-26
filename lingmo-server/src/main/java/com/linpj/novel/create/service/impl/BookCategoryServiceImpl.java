@@ -10,7 +10,6 @@ import com.linpj.novel.create.service.BookCategoryService;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -44,15 +43,9 @@ public class BookCategoryServiceImpl extends ServiceImpl<BookCategoryMapper, Boo
             vo.setCategoryName(category.getName());
             return vo;
         }).toList();
-        Map<Integer, List<BookCategoryVo>> collect = list.stream().collect(Collectors.groupingBy(BookCategoryVo::getWorkDirection));
-        Map<String, List<BookCategoryVo>> map = new HashMap<>();
-        for (Integer i : collect.keySet()) {
-            if (i==0) {
-                map.put("男频", collect.get(i));
-            } else {
-                map.put("女频", collect.get(i));
-            }
-        }
+        Map<String, List<BookCategoryVo>> map = list.stream()
+                .filter(vo -> vo.getWorkDirection() != null && !vo.getWorkDirection().isBlank())
+                .collect(Collectors.groupingBy(BookCategoryVo::getWorkDirection));
         redisTemplate.opsForValue().set(categoryKey, map);
         return map;
     }

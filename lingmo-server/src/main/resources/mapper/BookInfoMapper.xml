@@ -6,7 +6,7 @@
 
     <resultMap id="BaseResultMap" type="com.linpj.novel.create.pojo.entity.BookInfo">
             <id property="id" column="id" jdbcType="BIGINT"/>
-            <result property="workDirection" column="work_direction" jdbcType="SMALLINT"/>
+            <result property="workDirection" column="work_direction" jdbcType="VARCHAR"/>
             <result property="categoryId" column="category_id" jdbcType="BIGINT"/>
             <result property="categoryName" column="category_name" jdbcType="VARCHAR"/>
             <result property="picUrl" column="pic_url" jdbcType="VARCHAR"/>

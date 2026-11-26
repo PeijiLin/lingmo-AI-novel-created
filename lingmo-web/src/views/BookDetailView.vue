@@ -78,6 +78,7 @@ onMounted(load)
         <h1 class="font-book text-2xl font-semibold text-ink">{{ book.bookName }}</h1>
         <p class="mt-1 text-sm text-ink-secondary">{{ book.authorName || '佚名' }}</p>
         <p class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-mist">
+          <span v-if="book.workDirection?.trim()">{{ book.workDirection.trim() }}</span>
           <span v-if="book.categoryName">{{ book.categoryName }}</span>
           <span v-if="book.wordCount">{{ book.wordCount }} 字</span>
           <span v-if="book.visitCount">{{ book.visitCount }} 阅读</span>
