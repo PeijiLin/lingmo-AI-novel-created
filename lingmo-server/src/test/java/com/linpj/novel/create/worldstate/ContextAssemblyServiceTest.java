@@ -14,6 +14,7 @@ import com.linpj.novel.create.service.BookInfoService;
 import com.linpj.novel.create.service.CharacterCardsService;
 import com.linpj.novel.create.service.CharacterRelationshipsService;
 import com.linpj.novel.create.service.CharacterStateService;
+import com.linpj.novel.create.service.wiki.WikiPageService;
 import com.linpj.novel.create.service.PlotThreadService;
 import com.linpj.novel.create.service.StoryDigestService;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,6 +49,7 @@ class ContextAssemblyServiceTest {
     @Mock private CharacterStateService characterStateService;
     @Mock private CharacterRelationshipsService characterRelationshipsService;
     @Mock private BookChapterService bookChapterService;
+    @Mock private WikiPageService wikiPageService;
 
     private ContextAssemblyService service;
 
@@ -55,7 +57,7 @@ class ContextAssemblyServiceTest {
     void setUp() {
         service = new ContextAssemblyService(characterCardsService, bookInfoService,
                 storyDigestService, plotThreadService, characterStateService,
-                characterRelationshipsService, bookChapterService);
+                characterRelationshipsService, bookChapterService, wikiPageService);
     }
 
     private PipelineRequest request(String frontendWorldSetting) {
@@ -177,6 +179,73 @@ class ContextAssemblyServiceTest {
         assertTrue(context.getCharacterInfo().contains("主角 → 配角"));
         assertTrue(context.getCharacterInfo().contains("师徒"));
         assertTrue(context.getCharacterInfo().contains("[强度7]"));
+    }
+
+    // ------------------------------------------------------------------
+    // Wiki 正典页注入（M3：黑板权威依据 + provenance 标记）
+    // ------------------------------------------------------------------
+
+    @Test
+    void wikiPagesPrependToWorldSettingWithProvenanceMarks() {
+        when(bookInfoService.getById(1L)).thenReturn(null);
+        when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
+        when(characterStateService.renderStates(eq(1L), any())).thenReturn(null);
+        com.linpj.novel.create.pojo.entity.NovelWikiPage page =
+                new com.linpj.novel.create.pojo.entity.NovelWikiPage();
+        page.setId(33L);
+        page.setBookId(1L);
+        page.setEntityType("WORLD_RULE");
+        page.setEntityKey("rule:world_setting");
+        page.setTitle("世界观总纲");
+        page.setCanonical("灵潮衰退后的九州。");
+        when(wikiPageService.listCanonPages(1L)).thenReturn(List.of(page));
+        when(wikiPageService.renderPages(eq(1L), any()))
+                .thenReturn("【正典设定页（以此为准，未列出的事实不得自行新增）】\n- [wiki:33] 世界观总纲\n  灵潮衰退后的九州。\n");
+
+        WriterContext context = service.assembleWriterContext(request("原始设定文本"), null);
+
+        assertNotNull(context.getWorldSetting());
+        assertTrue(context.getWorldSetting().startsWith("【正典设定页"),
+                "正典页块应前置");
+        assertTrue(context.getWorldSetting().contains("[wiki:33]"), "provenance 标记应存在");
+        assertTrue(context.getWorldSetting().contains("原始设定文本"), "原始设定保留在页块之后");
+    }
+
+    @Test
+    void wikiChannelFailureDoesNotBlockAssembly() {
+        when(bookInfoService.getById(1L)).thenReturn(null);
+        when(characterCardsService.getCharacterCardsByProjectId(1L)).thenReturn(List.of());
+        when(characterStateService.renderStates(eq(1L), any())).thenReturn(null);
+        when(wikiPageService.listCanonPages(1L)).thenThrow(new RuntimeException("db down"));
+
+        WriterContext context = service.assembleWriterContext(request("前端世界观"), null);
+
+        assertEquals("前端世界观", context.getWorldSetting(), "Wiki 故障时回退原始设定");
+    }
+
+    @Test
+    void wikiHardCapKeepsWikiBlockAndTrimsOriginal() {
+        // 页块单行（与实现按首行拆分的结构一致）：provenance 在行内，之后接超长原始设定
+        String wikiBlock = "【正典设定页】- [wiki:1] 页卡硬事实填充" + "硬".repeat(200);
+        String original = "原".repeat(8000);
+        String combined = wikiBlock + "\n" + original;
+
+        String capped = ContextAssemblyService.wikiAwareHardCap(combined);
+
+        assertTrue(capped.startsWith("【正典设定页"), "页块开头完整保留");
+        assertTrue(capped.contains("[wiki:1]"), "provenance 不丢");
+        assertTrue(capped.length() <= 8000 * 2 / 5 + 60,
+                "整体应压在预算 2/5 附近，实际 " + capped.length());
+        // 原始设定保尾部 2978 字：总长 3203 - 页块 225
+        assertTrue(capped.endsWith("原".repeat(100)), "原始设定保尾部（被截断但保留）");
+        assertTrue(capped.length() < original.length(), "原始设定确实被压缩");
+    }
+
+    @Test
+    void nonWikiWorldSettingStillPlainHardCap() {
+        String plain = "设".repeat(9000);
+        String capped = ContextAssemblyService.wikiAwareHardCap(plain);
+        assertTrue(capped.contains("已截断"), "非页块结构走普通硬截断");
     }
 
     // ------------------------------------------------------------------

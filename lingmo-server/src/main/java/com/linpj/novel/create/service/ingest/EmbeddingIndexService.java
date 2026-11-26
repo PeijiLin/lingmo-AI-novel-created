@@ -67,24 +67,38 @@ public class EmbeddingIndexService {
      */
     public int indexSourceContent(Long bookId, Long sourceId, String content) {
         deleteSource(sourceId);
-        List<ChunkingService.Chunk> chunks = chunkingService.chunk(content);
-        if (chunks.isEmpty()) {
+        return indexTyped(bookId, null, sourceId, null, null, KIND_REFERENCE, null, content);
+    }
+
+    // ------------------------------------------------------------------
+    // Wiki 页卡入库（SETTING：检索路由主路径数据源）
+    // ------------------------------------------------------------------
+
+    /**
+     * 正典页 canonical 切块入库（pageId 打标，供实体定位→锚点下钻）。
+     * 重复调用按 pageId 幂等（先删旧块）。
+     *
+     * @return 本次入库块数
+     */
+    public int indexSettingContent(Long bookId, Long pageId, String canonical) {
+        if (pageId == null) {
             return 0;
         }
-        List<NovelRagChunk> rows = new ArrayList<>(chunks.size());
-        for (ChunkingService.Chunk chunk : chunks) {
-            NovelRagChunk row = new NovelRagChunk();
-            row.setBookId(bookId);
-            row.setSourceId(sourceId);
-            row.setChunkType(KIND_REFERENCE);
-            row.setSeq(chunk.seq());
-            row.setContent(chunk.content());
-            row.setTokenCount(chunk.tokenCount());
-            row.setEmbeddingModel(embeddingModel);
-            row.setStatus("READY");
-            rows.add(row);
+        deleteVectors("pageId == " + pageId);
+        chunkMapper.delete(new LambdaQueryWrapper<NovelRagChunk>()
+                .eq(NovelRagChunk::getPageId, pageId));
+        return indexTyped(bookId, pageId, null, null, null, KIND_SETTING, null, canonical);
+    }
+
+    /** 删除本书全部 SETTING 块与向量（页卡重建前置） */
+    public void deleteSettingChunks(Long bookId) {
+        if (bookId == null) {
+            return;
         }
-        return index(rows);
+        deleteVectors("bookId == " + bookId + " && kind == '" + KIND_SETTING + "'");
+        chunkMapper.delete(new LambdaQueryWrapper<NovelRagChunk>()
+                .eq(NovelRagChunk::getBookId, bookId)
+                .eq(NovelRagChunk::getChunkType, KIND_SETTING));
     }
 
     // ------------------------------------------------------------------
@@ -101,6 +115,15 @@ public class EmbeddingIndexService {
             return 0;
         }
         deleteChapter(bookId, chapterNum);
+        return indexTyped(bookId, null, null, null, null, KIND_CHAPTER, chapterNum, content);
+    }
+
+    /**
+     * 通用入库：切块 → 落 chunk 行 → 按契约打 metadata → 批量写向量。
+     * kind 决定唯一域（REFERENCE=sourceId / SETTING=pageId / CHAPTER=book+chapter）。
+     */
+    private int indexTyped(Long bookId, Long pageId, Long sourceId, Long anchorId,
+                           Long unused, String kind, Integer chapterNum, String content) {
         List<ChunkingService.Chunk> chunks = chunkingService.chunk(content);
         if (chunks.isEmpty()) {
             return 0;
@@ -109,7 +132,10 @@ public class EmbeddingIndexService {
         for (ChunkingService.Chunk chunk : chunks) {
             NovelRagChunk row = new NovelRagChunk();
             row.setBookId(bookId);
-            row.setChunkType(KIND_CHAPTER);
+            row.setPageId(pageId);
+            row.setSourceId(sourceId);
+            row.setAnchorId(anchorId);
+            row.setChunkType(kind);
             row.setChapterNum(chapterNum);
             row.setSeq(chunk.seq());
             row.setContent(chunk.content());

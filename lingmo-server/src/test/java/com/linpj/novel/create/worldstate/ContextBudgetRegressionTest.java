@@ -10,6 +10,7 @@ import com.linpj.novel.create.pojo.entity.BookInfo;
 import com.linpj.novel.create.service.CharacterCardsService;
 import com.linpj.novel.create.service.CharacterRelationshipsService;
 import com.linpj.novel.create.service.CharacterStateService;
+import com.linpj.novel.create.service.wiki.WikiPageService;
 import com.linpj.novel.create.service.PlotThreadService;
 import com.linpj.novel.create.service.StoryDigestService;
 import com.linpj.novel.create.pojo.vo.CharacterCardsVo;
@@ -56,6 +57,7 @@ class ContextBudgetRegressionTest {
     @Mock private CharacterStateService characterStateService;
     @Mock private CharacterRelationshipsService characterRelationshipsService;
     @Mock private BookChapterService bookChapterService;
+    @Mock private WikiPageService wikiPageService;
 
     private ContextAssemblyService service;
 
@@ -63,7 +65,7 @@ class ContextBudgetRegressionTest {
     void setUp() {
         service = new ContextAssemblyService(characterCardsService, bookInfoService,
                 storyDigestService, plotThreadService, characterStateService,
-                characterRelationshipsService, bookChapterService);
+                characterRelationshipsService, bookChapterService, wikiPageService);
     }
 
     private void stubBook(String worldSetting) {

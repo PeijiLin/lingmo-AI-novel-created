@@ -4,6 +4,7 @@ import com.linpj.novel.create.pojo.dto.AiChatRequest;
 import com.linpj.novel.create.pojo.entity.BookChapter;
 import com.linpj.novel.create.pojo.entity.BookInfo;
 import com.linpj.novel.create.pojo.entity.CharacterRelationships;
+import com.linpj.novel.create.pojo.entity.NovelWikiPage;
 import com.linpj.novel.create.pojo.pipeline.ChapterOutline;
 import com.linpj.novel.create.pojo.pipeline.CriticContext;
 import com.linpj.novel.create.pojo.pipeline.PipelineRequest;
@@ -17,6 +18,7 @@ import com.linpj.novel.create.service.CharacterStateService;
 import com.linpj.novel.create.service.CharacterCardsService;
 import com.linpj.novel.create.service.PlotThreadService;
 import com.linpj.novel.create.service.StoryDigestService;
+import com.linpj.novel.create.service.wiki.WikiPageService;
 import org.springframework.stereotype.Service;
 
 import java.util.Comparator;
@@ -59,6 +61,7 @@ public class ContextAssemblyService {
     private final CharacterStateService characterStateService;
     private final CharacterRelationshipsService characterRelationshipsService;
     private final BookChapterService bookChapterService;
+    private final WikiPageService wikiPageService;
 
     public ContextAssemblyService(CharacterCardsService characterCardsService,
                                   BookInfoService bookInfoService,
@@ -66,7 +69,8 @@ public class ContextAssemblyService {
                                   PlotThreadService plotThreadService,
                                   CharacterStateService characterStateService,
                                   CharacterRelationshipsService characterRelationshipsService,
-                                  BookChapterService bookChapterService) {
+                                  BookChapterService bookChapterService,
+                                  WikiPageService wikiPageService) {
         this.characterCardsService = characterCardsService;
         this.bookInfoService = bookInfoService;
         this.storyDigestService = storyDigestService;
@@ -74,6 +78,7 @@ public class ContextAssemblyService {
         this.characterStateService = characterStateService;
         this.characterRelationshipsService = characterRelationshipsService;
         this.bookChapterService = bookChapterService;
+        this.wikiPageService = wikiPageService;
     }
 
     // ------------------------------------------------------------------
@@ -97,6 +102,10 @@ public class ContextAssemblyService {
         context.setWorldSetting(resolveWorldSetting(request));
         context.setStyle(request.getStyle());
         context.setStoryDigest(storyDigestService.getDigest(request.getBookId()));
+        // M3：正典页卡前置（硬 attrs + provenance 标记 [wiki:id]）——优先于角色卡渲染
+        context.setWorldSetting(prepend(
+                renderWikiPages(request.getBookId(), castIds(outline)),
+                context.getWorldSetting()));
         context.setCharacterInfo(loadCharacterInfo(request.getBookId(), castIds(outline)));
         context.setCharacterInfo(prepend(
                 renderRelationships(request.getBookId(), request.getChapterId(), castIds(outline)),
@@ -117,6 +126,10 @@ public class ContextAssemblyService {
         context.setDraft(draft);
         context.setTitle(request.getTitle());
         context.setWorldSetting(resolveWorldSetting(request));
+        // M3：正典页卡前置（Critic 审查基准同样以正典为准）
+        context.setWorldSetting(prepend(
+                renderWikiPages(request.getBookId(), castIds(outline)),
+                context.getWorldSetting()));
         context.setCharacterInfo(loadCharacterInfo(request.getBookId(), castIds(outline)));
         context.setCharacterInfo(prepend(
                 renderRelationships(request.getBookId(), request.getChapterId(), castIds(outline)),
@@ -144,6 +157,10 @@ public class ContextAssemblyService {
         context.setUserInput(request.getUserInput());
         context.setTitle(request.getTitle());
         context.setWorldSetting(resolveWorldSetting(request));
+        // M3：正典页卡前置（Planner 规划同样以正典为准）
+        context.setWorldSetting(prepend(
+                renderWikiPages(request.getBookId(), null),
+                context.getWorldSetting()));
         context.setCharacterInfo(loadCharacterInfo(request.getBookId(), null));
         context.setCharacterInfo(prepend(
                 renderRelationships(request.getBookId(), request.getChapterId(), null),
@@ -218,6 +235,41 @@ public class ContextAssemblyService {
             return body;
         }
         return body == null || body.isBlank() ? block : block + "\n" + body;
+    }
+
+    /**
+     * 渲染正典页卡（M3：黑板的权威依据，ADR-2 正典层）。
+     * 出场角色对应 CHARACTER 页必注入；非 CHARACTER 页（WORLD_RULE 等）全量注入。
+     * 预算兜底时硬 attrs 不裁（canonical 描述可截断）——renderPages 内部已实现分层截断。
+     */
+    private String renderWikiPages(Long bookId, List<Long> castIds) {
+        if (bookId == null) {
+            return null;
+        }
+        List<NovelWikiPage> pages;
+        try {
+            pages = wikiPageService.listCanonPages(bookId);
+        } catch (Exception e) {
+            return null; // Wiki 通道故障：宁缺勿错，不阻塞创作
+        }
+        if (pages == null || pages.isEmpty()) {
+            return null;
+        }
+        // 出场角色过滤：CHARACTER 页按 castIds 取，其余类型全量
+        List<Long> pageIds;
+        if (castIds != null && !castIds.isEmpty()) {
+            pageIds = pages.stream()
+                    .filter(page -> !"CHARACTER".equals(page.getEntityType())
+                            || (page.getEntityId() != null && castIds.contains(page.getEntityId())))
+                    .map(NovelWikiPage::getId)
+                    .toList();
+        } else {
+            pageIds = pages.stream().map(NovelWikiPage::getId).toList();
+        }
+        if (pageIds.isEmpty()) {
+            return null;
+        }
+        return wikiPageService.renderPages(bookId, pageIds);
     }
 
     /**
@@ -366,8 +418,8 @@ public class ContextAssemblyService {
         }
         // 无大纲时角色卡为全量事实基准，不裁；裁历史伏笔
         context.setActivePlotThreads(null);
-        // 极端兜底（同 Writer）
-        context.setWorldSetting(hardCap(context.getWorldSetting(), WORLD_SETTING_HARD_CAP));
+        // 极端兜底（同 Writer）：正典页块完整保留，只截原始设定
+        context.setWorldSetting(wikiAwareHardCap(context.getWorldSetting()));
         characterInfoHardCap(context, totalChars(context) - CONTEXT_CHAR_BUDGET);
     }
 
@@ -386,9 +438,44 @@ public class ContextAssemblyService {
         }
         // 裁历史伏笔（角色列表为选择基准，永不裁）
         context.setActivePlotThreads(null);
-        // 极端兜底（同 Writer）
-        context.setWorldSetting(hardCap(context.getWorldSetting(), WORLD_SETTING_HARD_CAP));
+        // 极端兜底（同 Writer）：正典页块完整保留，只截原始设定
+        context.setWorldSetting(wikiAwareHardCap(context.getWorldSetting()));
         characterInfoHardCap(context, totalChars(context) - CONTEXT_CHAR_BUDGET);
+    }
+
+    /**
+     * 带正典块感知的硬截断：worldSetting = [wiki 页块]\n[原始设定]。
+     * 页块完整保留（超长时单独截其 canonical 描述已在 renderPages 内完成）；
+     * 原始设定压到剩余额度，额度耗尽也保留头部标记。
+     */
+    static String wikiAwareHardCap(String worldSetting) {
+        if (worldSetting == null || worldSetting.length() <= WORLD_SETTING_HARD_CAP) {
+            return worldSetting;
+        }
+        int split = worldSetting.indexOf("\n");
+        boolean wikiFirst = worldSetting.startsWith("【正典设定页") && split > 0;
+        if (!wikiFirst) {
+            return hardCapStatic(worldSetting, WORLD_SETTING_HARD_CAP);
+        }
+        String wikiBlock = worldSetting.substring(0, split);
+        String original = worldSetting.substring(split + 1);
+        int remaining = Math.max(WORLD_SETTING_HARD_CAP - wikiBlock.length(), 0);
+        if (original.length() <= remaining) {
+            return worldSetting;
+        }
+        if (remaining == 0) {
+            return wikiBlock; // 极端：页块本身吃满预算，原始设定整体丢弃
+        }
+        return wikiBlock + "\n……" + original.substring(original.length() - remaining);
+    }
+
+    /** 静态硬截断（保头部 + 截断标记；null/未超限原样返回） */
+    private static String hardCapStatic(String text, int cap) {
+        if (text == null || text.length() <= cap || cap <= 0) {
+            return text;
+        }
+        String marker = "\n……(设定过长已截断，完整版见书籍设定)";
+        return text.substring(0, Math.max(0, cap - marker.length())) + marker;
     }
 
     /** story_digest 截断（保留最近尾部；已短于保留长度时不变） */
@@ -403,8 +490,12 @@ public class ContextAssemblyService {
     // 极端兜底硬上限（TC-01：设定/角色池本身超预算时必须压住，防长篇持续膨胀）
     // ------------------------------------------------------------------
 
+    /**
+     * 世界观硬上限：正典页块（以【正典设定页开头标记）完整保留，只截后方的原始 worldSetting。
+     * 硬 attrs 永不裁是 M3 的注入承诺——截断只作用于自由文本。
+     */
     private void worldSettingHardCap(WriterContext context) {
-        context.setWorldSetting(hardCap(context.getWorldSetting(), WORLD_SETTING_HARD_CAP));
+        context.setWorldSetting(wikiAwareHardCap(context.getWorldSetting()));
     }
 
     /** Writer 角色信息兜底截断（保头部：角色列表与出场状态在头部，头部是最重要信息） */
