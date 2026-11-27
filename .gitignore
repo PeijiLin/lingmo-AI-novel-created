@@ -56,6 +56,15 @@ application-dev.yml
 # Agent temp files
 .temp/
 
+# Agent local directories (tool configs, skills, sessions, memory)
+.opencode/
+.claude/
+.agents/
+.cursor/
+.codex/
+.qoder/
+# Note: .github/ is tracked (workflows) — do not ignore it globally
+
 # Frontend (lingmo-web)
 node_modules/
 dist/
