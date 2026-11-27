@@ -67,4 +67,6 @@ Frontend commands run from `lingmo-web/` (npm; on Windows PowerShell use `npm.cm
 - No lint/formatter/static-analysis config for the backend and no CI. `cd lingmo-server && mvn test` is the backend gate. Frontend gate: `cd lingmo-web && npm.cmd run type-check && npm.cmd run test:unit -- --run && npm.cmd run build`.
 - Tests are unit-level; there is no test profile/config for Spring-context tests.
 
-> AI生成
+## Workflow
+
+- **只在用户明确说"提交"时才执行 `git commit`**。改完代码后不要自动提交；即使实现计划里写了 commit 步骤，也要先等用户确认。
