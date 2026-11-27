@@ -40,7 +40,7 @@ async function load() {
   loading.value = true
   try {
     book.value = await getBookInfo(bookId)
-    const page = await pageChapters({ pageNum: 1, pageSize: 200, bookInfoId: bookId })
+    const page = await pageChapters({ pageNum: 1, pageSize: 500, bookInfoId: bookId })
     chapters.value = page.records ?? []
     const ids = chapters.value.map((c) => c.id).filter((id): id is number => !!id)
     resumeChapterId.value = resolveChapterId(

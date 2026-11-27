@@ -226,7 +226,8 @@ onBeforeUnmount(() => {
       />
     </div>
 
-    <!-- 阅读栏 -->
+    <!-- 阅读栏：主题仅作用于本页容器（不含全局与目录抽屉） -->
+    <div class="reader-surface" :data-theme="settings.theme">
     <div class="mx-auto max-w-2xl px-6 py-8 sm:px-8">
       <div class="flex items-center justify-between gap-2">
         <button
@@ -306,7 +307,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 正文：窄栏衬线；主题仅作用于本地容器 -->
-      <div class="reader-surface mt-10" :data-theme="settings.theme" :style="readerStyle">
+      <div class="mt-10" :style="readerStyle">
         <article v-if="loading && !content" class="space-y-4 font-read">
           <div v-for="i in 8" :key="i" class="h-4 animate-pulse rounded bg-mist-line/60" />
         </article>
@@ -333,6 +334,7 @@ onBeforeUnmount(() => {
           <ArrowRight class="size-4" />
         </Button>
       </nav>
+    </div>
     </div>
 
     <!-- 目录抽屉 -->

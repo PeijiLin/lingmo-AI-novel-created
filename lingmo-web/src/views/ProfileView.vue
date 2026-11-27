@@ -127,9 +127,9 @@ function onProfileBlur(field: string) {
   profileErrors.value = errs.filter((e) => e.field === field)
 }
 
-async function focusSummary(el: HTMLElement | null) {
+async function focusSummary(getRef: () => HTMLElement | null) {
   await nextTick()
-  el?.focus()
+  getRef()?.focus()
 }
 
 function openProfileEdit() {
@@ -143,7 +143,7 @@ function openProfileEdit() {
 async function saveProfile() {
   profileErrors.value = validateProfileForm(profileForm)
   if (profileErrors.value.length) {
-    await focusSummary(profileSummary.value)
+    await focusSummary(() => profileSummary.value)
     return
   }
   const name = profileForm.nickName.trim()
@@ -202,7 +202,7 @@ function openAuthorEdit() {
 async function saveAuthor() {
   authorErrors.value = validateAuthorForm(authorForm)
   if (authorErrors.value.length) {
-    await focusSummary(authorSummary.value)
+    await focusSummary(() => authorSummary.value)
     return
   }
   const penName = authorForm.penName.trim()
