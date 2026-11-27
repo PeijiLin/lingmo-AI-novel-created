@@ -11,6 +11,12 @@ import { useToast } from '@/composables/useToast'
 import { addToBookshelf } from '@/api/shelf'
 import { getBookInfo, pageChapters } from '@/api/books'
 import type { BookChapterVo, BookInfoVo } from '@/api/types'
+import {
+  getLatestEntry,
+  parseReadingProgress,
+  READ_PROGRESS_KEY,
+  resolveChapterId,
+} from '@/utils/readingProgress'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,6 +26,15 @@ const bookId = Number(route.params.id)
 const book = ref<BookInfoVo | null>(null)
 const chapters = ref<BookChapterVo[]>([])
 const loading = ref(true)
+const resumeChapterId = ref<number | undefined>(undefined)
+
+function readProgress(): string | null {
+  try {
+    return localStorage.getItem(READ_PROGRESS_KEY)
+  } catch {
+    return null
+  }
+}
 
 async function load() {
   loading.value = true
@@ -27,6 +42,11 @@ async function load() {
     book.value = await getBookInfo(bookId)
     const page = await pageChapters({ pageNum: 1, pageSize: 200, bookInfoId: bookId })
     chapters.value = page.records ?? []
+    const ids = chapters.value.map((c) => c.id).filter((id): id is number => !!id)
+    resumeChapterId.value = resolveChapterId(
+      getLatestEntry(parseReadingProgress(readProgress()), bookId),
+      ids,
+    )
   } catch (err) {
     toast.error('作品加载失败', err instanceof Error ? err.message : undefined)
   } finally {
@@ -87,9 +107,13 @@ onMounted(load)
         <p v-if="book.bookDesc" class="mt-4 max-w-xl text-sm leading-relaxed text-ink-secondary">{{ book.bookDesc }}</p>
 
         <div class="mt-6 flex flex-wrap items-center gap-3">
-          <Button variant="cinnabar" size="lg" @click="startReading(chapters[0]?.id)">
+          <Button
+            variant="cinnabar"
+            size="lg"
+            @click="startReading(resumeChapterId && resumeChapterId !== chapters[0]?.id ? resumeChapterId : chapters[0]?.id)"
+          >
             <BookOpen class="size-4" />
-            {{ chapters.length ? '开始阅读' : '尚无章节' }}
+            {{ chapters.length ? (resumeChapterId && resumeChapterId !== chapters[0]?.id ? '继续阅读' : '开始阅读') : '尚无章节' }}
           </Button>
           <Button variant="outline" @click="joinShelf">
             <Plus class="size-4" />

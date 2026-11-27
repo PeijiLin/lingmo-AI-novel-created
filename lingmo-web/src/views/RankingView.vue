@@ -11,19 +11,21 @@ import { Button, Skeleton } from '@/components/ui'
 import { useToast } from '@/composables/useToast'
 import { listRanking } from '@/api/books'
 import type { BookInfoVo } from '@/api/types'
+import { clampRankLimit, formatVisitCount, sanitizeRanking } from '@/utils/ranking'
+import { cn } from '@/utils/cn'
 
 const router = useRouter()
 const toast = useToast()
 
 const rankList = ref<BookInfoVo[]>([])
 const loading = ref(false)
+const limit = ref<20 | 50>(20)
 
 async function load() {
   loading.value = true
   try {
     // 后端 GET /book/ranking 已就绪：直接使用服务端按阅读量排序
-    const data = await listRanking(20)
-    rankList.value = Array.isArray(data) ? data : []
+    rankList.value = sanitizeRanking(await listRanking(limit.value))
   } catch (err) {
     toast.error('榜单加载失败', err instanceof Error ? err.message : undefined)
   } finally {
@@ -33,6 +35,13 @@ async function load() {
 
 function open(book: BookInfoVo) {
   if (book.id) router.push(`/book/${book.id}`)
+}
+
+function setLimit(value: number) {
+  const next = clampRankLimit(value)
+  if (next === limit.value) return
+  limit.value = next
+  load()
 }
 
 onMounted(load)
@@ -50,10 +59,27 @@ function rankColor(i: number) {
         <h1 class="font-book text-xl font-semibold text-ink">排行</h1>
         <p class="mt-1 text-xs text-ink-secondary">按阅读量排名的热度榜。</p>
       </div>
-      <Button variant="ghost" size="sm" :loading="loading" @click="load">
-        <RefreshCw class="size-3.5" />
-        刷新
-      </Button>
+      <div class="flex items-center gap-2">
+        <div class="flex rounded-md border border-mist-line bg-paper-surface p-0.5" aria-label="榜单条数">
+          <button
+            v-for="n in [20, 50]"
+            :key="n"
+            type="button"
+            :aria-pressed="limit === n"
+            :class="cn(
+              'rounded-sm px-2 py-1 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-indigo/40',
+              limit === n ? 'bg-ink-indigo text-paper-surface' : 'text-ink-secondary hover:text-ink',
+            )"
+            @click="setLimit(n)"
+          >
+            {{ n }}
+          </button>
+        </div>
+        <Button variant="ghost" size="sm" :loading="loading" @click="load">
+          <RefreshCw class="size-3.5" />
+          刷新
+        </Button>
+      </div>
     </div>
 
     <section class="mt-6" aria-label="排行榜">
@@ -85,7 +111,7 @@ function rankColor(i: number) {
               </span>
             </span>
             <span class="shrink-0 text-right">
-              <span class="block text-xs font-medium text-cinnabar">{{ (book.visitCount ?? 0).toLocaleString() }}</span>
+              <span class="block text-xs font-medium text-cinnabar tabular-nums">{{ formatVisitCount(book.visitCount) }}</span>
               <span class="block text-[10px] text-mist">阅读</span>
             </span>
           </button>
