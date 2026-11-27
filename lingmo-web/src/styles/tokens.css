@@ -78,3 +78,27 @@
   /* 动效时长 */
   --ease-paper: cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* 阅读偏好：仅在阅读正文容器内覆盖，不污染全局界面 */
+.reader-surface[data-theme='sepia'] {
+  --paper: #f2e9d8;
+  --paper-surface: #f7f0e2;
+  --ink: #3b3226;
+  --ink-secondary: #6b5c48;
+  --ink-indigo: #4a5a45;
+  --mist: #8f826c;
+  --mist-line: #d9cbb2;
+}
+
+.reader-surface[data-theme='night'] {
+  --paper: #161615;
+  --paper-surface: #20201e;
+  --ink: #e3ded4;
+  --ink-secondary: #b0aaa0;
+  --ink-indigo: #a9bfd0;
+  --cinnabar: #d98c83;
+  --cinnabar-wash: #332421;
+  --cinnabar-line: #8c5c56;
+  --mist: #8a877f;
+  --mist-line: #34322e;
+}
