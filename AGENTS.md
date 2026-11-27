@@ -31,6 +31,14 @@ Frontend commands run from `lingmo-web/` (npm; on Windows PowerShell use `npm.cm
 - `lingmo-server/sql/multi_agent.sql` is GBK-encoded while the other SQL files are UTF-8; convert it to UTF-8 if psql rejects its Chinese comments.
 - Kafka topics (`novel.creation.task`, `novel.chapter.finalized`) are created by `KafkaConfig`; no manual topic setup.
 
+## Knowledge base / RAG (v2, 2026-11)
+
+- `service.ingest` is the only write path to RAG data: `ChunkingService` (paragraph chunks, ~400 chars, 50-char overlap), `EmbeddingIndexService` (chunk rows + vector projection + metadata contract: `bookId`/`chunkId`/`kind` as JSON numbers — writing strings breaks book-level filtering), `KbSourceService` (source CRUD; same-name file re-upload = replace).
+- `novel_rag_chunk` is the authoritative record; `vector_store` (Spring AI-managed, do NOT alter columns — extensions go into `metadata` JSON) is a rebuildable projection. Chapter finalization back-fills CHAPTER chunks keyed by `(bookId, create_book.number)` — idempotent delete-then-insert.
+- Wiki layer: `novel_wiki_page/alias/anchor` + `service.wiki` (canonical pages, alias-based entity location, provenance `[wiki:id]`), `service.retrieval.RetrievalRouter` (alias match → SETTING chunks → similarity fallback). Writer/Critic use `RagAdvisorFactory.routedForBook`; the plain `forBook` remains for ablation.
+- `wiki.get` tool is on all three L2 gateway tool whitelists. Rules RC-W1/RC-W2 read CHARACTER page attrs (gender/age).
+- Perf note: `vector_store.metadata` is `json` (not `jsonb`); filtered kNN does a Seq Scan (~300ms at 10k rows, ~600ms end-to-end). Needs a dedicated migration (cast + expression index) if scale grows past ~30k chunks — do not hand-alter the Spring AI managed table casually.
+
 ## Architecture
 
 - Package root: `lingmo-server/src/main/java/com/linpj/novel/create`. One PostgreSQL datasource (`spring.datasource.novel-system` → `138/lingmo`) bound by `@MapperScan` on `com.linpj.novel.create.mapper`; keep new mappers under `mapper/novel` and don't add another `@MapperScan`. `PgVectorStore` uses the same DataSource (`VectorStoreConfig`), so chunk metadata and vectors share a transaction.
