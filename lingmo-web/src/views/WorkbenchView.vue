@@ -11,7 +11,9 @@ import { Button, Card, Combobox, Dialog, Input, Textarea, Skeleton } from '@/com
 import BookScrollCard from '@/components/base/BookScrollCard.vue'
 import { useToast } from '@/composables/useToast'
 import { useAuth } from '@/composables/useAuth'
-import { createBook, listAuthorBooks } from '@/api/books'
+import { createBook, listAuthorBooks, listCategories } from '@/api/books'
+import { toCategoryOptions } from '@/utils/categoryOptions'
+import type { ComboboxOption } from '@/components/ui'
 import type { BookInfoVo } from '@/api/types'
 
 const router = useRouter()
@@ -21,6 +23,7 @@ const { store } = useAuth()
 const books = ref<BookInfoVo[]>([])
 const loading = ref(false)
 const creating = ref(false)
+const directionOptions = ref<ComboboxOption[]>([])
 
 /* ---------------- 新建作品 ---------------- */
 
@@ -43,7 +46,19 @@ async function loadBooks() {
   }
 }
 
-onMounted(loadBooks)
+async function loadCategories() {
+  try {
+    directionOptions.value = toCategoryOptions(await listCategories())
+  } catch (err) {
+    directionOptions.value = []
+    toast.warning('分类列表加载失败，可手动输入方向', err instanceof Error ? err.message : undefined)
+  }
+}
+
+onMounted(() => {
+  loadBooks()
+  loadCategories()
+})
 
 async function handleCreate() {
   const name = createForm.bookName.trim()
@@ -156,11 +171,7 @@ function openCreator(book: BookInfoVo) {
           <span class="mb-1.5 block text-xs font-medium text-ink">作品方向</span>
           <Combobox
             v-model="createForm.workDirection"
-            :options="[
-              { label: '男频', value: '男频' },
-              { label: '女频', value: '女频' },
-              { label: '无特定方向', value: '无特定方向' },
-            ]"
+            :options="directionOptions"
             placeholder="选择或输入自定义方向（可留空）"
             maxlength="20"
           />
