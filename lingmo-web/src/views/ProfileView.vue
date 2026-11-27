@@ -4,7 +4,7 @@
  * 三段式：用户卡（头像/昵称/性别/注册时间）→ 数据统计（作品/在读/余额）→ 作者档案（笔名/联系/邀请码）。
  * 作者档案未开档时给出「开设档案」引导；创建作品亦会自动开档（后端 resolveByUserId）。
  */
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import {
   Coins,
   Copy,
@@ -30,6 +30,11 @@ import {
   updateMyProfile,
 } from '@/api/user'
 import type { AuthorProfileVo, UserProfileVo } from '@/api/types'
+import {
+  validateAuthorForm,
+  validateProfileForm,
+  type FieldError,
+} from '@/utils/formValidation'
 
 const toast = useToast()
 const { store } = useAuth()
@@ -105,20 +110,43 @@ function formatDate(v?: string | number | null): string {
 const profileOpen = ref(false)
 const profileSaving = ref(false)
 const profileForm = reactive({ nickName: '', userSex: '' })
+const profileErrors = ref<FieldError[]>([])
+const profileSummary = ref<HTMLElement | null>(null)
+
+function errorFor(errors: FieldError[], field: string): string | undefined {
+  return errors.find((e) => e.field === field)?.message
+}
+
+const profileNicknameError = computed(() => errorFor(profileErrors.value, 'nickName'))
+const authorPenNameError = computed(() => errorFor(authorErrors.value, 'penName'))
+const authorEmailError = computed(() => errorFor(authorErrors.value, 'email'))
+const authorPhoneError = computed(() => errorFor(authorErrors.value, 'telPhone'))
+
+function onProfileBlur(field: string) {
+  const errs = validateProfileForm(profileForm)
+  profileErrors.value = errs.filter((e) => e.field === field)
+}
+
+async function focusSummary(el: HTMLElement | null) {
+  await nextTick()
+  el?.focus()
+}
 
 function openProfileEdit() {
   profileForm.nickName = profile.value?.nickName ?? profile.value?.username ?? ''
   profileForm.userSex =
     profile.value?.userSex === 0 || profile.value?.userSex === 1 ? String(profile.value.userSex) : ''
+  profileErrors.value = []
   profileOpen.value = true
 }
 
 async function saveProfile() {
-  const name = profileForm.nickName.trim()
-  if (!name) {
-    toast.warning('昵称不能为空')
+  profileErrors.value = validateProfileForm(profileForm)
+  if (profileErrors.value.length) {
+    await focusSummary(profileSummary.value)
     return
   }
+  const name = profileForm.nickName.trim()
   profileSaving.value = true
   try {
     profile.value = await updateMyProfile({
@@ -146,6 +174,17 @@ const authorForm = reactive({
   telPhone: '',
   chatAccount: '',
 })
+const authorErrors = ref<FieldError[]>([])
+const authorSummary = ref<HTMLElement | null>(null)
+const clipboardFailed = ref(false)
+
+function onAuthorBlur(field: string) {
+  const errs = validateAuthorForm(authorForm)
+  authorErrors.value = [
+    ...authorErrors.value.filter((e) => e.field !== field),
+    ...errs.filter((e) => e.field === field),
+  ]
+}
 
 /** creatingAuthor = 未开档走首次创建文案 */
 const creatingAuthor = computed(() => !author.value)
@@ -156,15 +195,17 @@ function openAuthorEdit() {
   authorForm.email = author.value?.email ?? ''
   authorForm.telPhone = author.value?.telPhone ?? ''
   authorForm.chatAccount = author.value?.chatAccount ?? ''
+  authorErrors.value = []
   authorOpen.value = true
 }
 
 async function saveAuthor() {
-  const penName = authorForm.penName.trim()
-  if (!penName) {
-    toast.warning('请填写笔名')
+  authorErrors.value = validateAuthorForm(authorForm)
+  if (authorErrors.value.length) {
+    await focusSummary(authorSummary.value)
     return
   }
+  const penName = authorForm.penName.trim()
   const wasCreating = creatingAuthor.value
   authorSaving.value = true
   try {
@@ -191,9 +232,11 @@ async function copyInvite(code?: string | null) {
   if (!code) return
   try {
     await navigator.clipboard.writeText(code)
+    clipboardFailed.value = false
     toast.success('邀请码已复制', code)
   } catch {
-    toast.warning('复制失败', '请手动抄录邀请码')
+    clipboardFailed.value = true
+    toast.warning('复制失败', '请在下方手动选中并复制邀请码')
   }
 }
 </script>
@@ -358,6 +401,9 @@ async function copyInvite(code?: string | null) {
                     <Copy class="size-3.5" />
                   </button>
                 </div>
+                <p v-if="clipboardFailed && author.inviteCode" class="mt-1 text-[11px] text-cinnabar">
+                  请手动选中复制：<span class="select-all font-book tracking-wider">{{ author.inviteCode }}</span>
+                </p>
               </div>
             </div>
           </div>
@@ -390,9 +436,31 @@ async function copyInvite(code?: string | null) {
       width="sm"
     >
       <form class="space-y-4" @submit.prevent="saveProfile">
+        <div
+          v-if="profileErrors.length"
+          ref="profileSummary"
+          role="alert"
+          tabindex="-1"
+          class="rounded-md border border-cinnabar-line bg-cinnabar-wash px-3 py-2 text-xs text-cinnabar focus-visible:outline-none"
+        >
+          <p class="font-medium">请修正以下问题：</p>
+          <ul class="mt-1 list-disc pl-4">
+            <li v-for="e in profileErrors" :key="e.field">{{ e.message }}</li>
+          </ul>
+        </div>
         <label class="block">
           <span class="mb-1.5 block text-xs font-medium text-ink">昵称</span>
-          <Input v-model="profileForm.nickName" placeholder="例：执墨君" maxlength="20" />
+          <Input
+            v-model="profileForm.nickName"
+            placeholder="例：执墨君"
+            maxlength="20"
+            :aria-invalid="!!profileNicknameError"
+            :aria-describedby="profileNicknameError ? 'profile-nickname-error' : undefined"
+            @blur="onProfileBlur('nickName')"
+          />
+          <p v-if="profileNicknameError" id="profile-nickname-error" class="mt-1 text-xs text-cinnabar">
+            {{ profileNicknameError }}
+          </p>
         </label>
         <label class="block">
           <span class="mb-1.5 block text-xs font-medium text-ink">性别</span>
@@ -421,9 +489,31 @@ async function copyInvite(code?: string | null) {
       width="md"
     >
       <form class="space-y-4" @submit.prevent="saveAuthor">
+        <div
+          v-if="authorErrors.length"
+          ref="authorSummary"
+          role="alert"
+          tabindex="-1"
+          class="rounded-md border border-cinnabar-line bg-cinnabar-wash px-3 py-2 text-xs text-cinnabar focus-visible:outline-none"
+        >
+          <p class="font-medium">请修正以下问题：</p>
+          <ul class="mt-1 list-disc pl-4">
+            <li v-for="e in authorErrors" :key="e.field">{{ e.message }}</li>
+          </ul>
+        </div>
         <label class="block">
           <span class="mb-1.5 block text-xs font-medium text-ink">笔名 <span class="text-cinnabar">*</span></span>
-          <Input v-model="authorForm.penName" placeholder="例：执墨君" maxlength="20" />
+          <Input
+            v-model="authorForm.penName"
+            placeholder="例：执墨君"
+            maxlength="20"
+            :aria-invalid="!!authorPenNameError"
+            :aria-describedby="authorPenNameError ? 'author-penname-error' : undefined"
+            @blur="onAuthorBlur('penName')"
+          />
+          <p v-if="authorPenNameError" id="author-penname-error" class="mt-1 text-xs text-cinnabar">
+            {{ authorPenNameError }}
+          </p>
         </label>
         <label class="block">
           <span class="mb-1.5 block text-xs font-medium text-ink">创作方向</span>
@@ -441,11 +531,31 @@ async function copyInvite(code?: string | null) {
         <div class="grid gap-4 sm:grid-cols-2">
           <label class="block">
             <span class="mb-1.5 block text-xs font-medium text-ink">电子邮箱</span>
-            <Input v-model="authorForm.email" placeholder="name@example.com" maxlength="64" />
+            <Input
+              v-model="authorForm.email"
+              placeholder="name@example.com"
+              maxlength="64"
+              :aria-invalid="!!authorEmailError"
+              :aria-describedby="authorEmailError ? 'author-email-error' : undefined"
+              @blur="onAuthorBlur('email')"
+            />
+            <p v-if="authorEmailError" id="author-email-error" class="mt-1 text-xs text-cinnabar">
+              {{ authorEmailError }}
+            </p>
           </label>
           <label class="block">
             <span class="mb-1.5 block text-xs font-medium text-ink">联系电话</span>
-            <Input v-model="authorForm.telPhone" placeholder="可选" maxlength="20" />
+            <Input
+              v-model="authorForm.telPhone"
+              placeholder="可选"
+              maxlength="20"
+              :aria-invalid="!!authorPhoneError"
+              :aria-describedby="authorPhoneError ? 'author-phone-error' : undefined"
+              @blur="onAuthorBlur('telPhone')"
+            />
+            <p v-if="authorPhoneError" id="author-phone-error" class="mt-1 text-xs text-cinnabar">
+              {{ authorPhoneError }}
+            </p>
           </label>
         </div>
         <label class="block">
