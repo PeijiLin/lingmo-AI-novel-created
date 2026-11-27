@@ -25,8 +25,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RagAdvisorFactoryTest {
 
-    /** 构造被测工厂（augmentQuery 不依赖 vectorStore，传 null 即可） */
-    private final RagAdvisorFactory factory = new RagAdvisorFactory(null);
+    /** 构造被测工厂（augmentQuery 不依赖 vectorStore/RetrievalRouter，传 null 即可） */
+    private final RagAdvisorFactory factory = new RagAdvisorFactory(null, null);
 
     private Query query(String text) {
         return new Query(text, new ArrayList<>(), new HashMap<>());

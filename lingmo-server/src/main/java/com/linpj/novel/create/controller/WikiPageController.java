@@ -5,6 +5,7 @@ import com.linpj.novel.create.constant.ResultUtils;
 import com.linpj.novel.create.exception.ErrorCode;
 import com.linpj.novel.create.exception.ThrowsUtils;
 import com.linpj.novel.create.pojo.entity.NovelWikiPage;
+import com.linpj.novel.create.service.retrieval.RetrievalRouter;
 import com.linpj.novel.create.service.wiki.WikiBootstrapService;
 import com.linpj.novel.create.service.wiki.WikiPageService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -32,11 +33,28 @@ public class WikiPageController {
 
     private final WikiPageService wikiPageService;
     private final WikiBootstrapService wikiBootstrapService;
+    private final RetrievalRouter retrievalRouter;
 
     public WikiPageController(WikiPageService wikiPageService,
-                              WikiBootstrapService wikiBootstrapService) {
+                              WikiBootstrapService wikiBootstrapService,
+                              RetrievalRouter retrievalRouter) {
         this.wikiPageService = wikiPageService;
         this.wikiBootstrapService = wikiBootstrapService;
+        this.retrievalRouter = retrievalRouter;
+    }
+
+    /**
+     * M4 检索路由调试端点：三段式（实体定位→锚点下钻→相似度兜底）检索本书证据。
+     * 证据带 chunkId/pageId 回指字段；供冒烟与前端"证据溯源"面板使用。
+     */
+    @GetMapping("/{bookId}/retrieve")
+    public BaseResponse<List<RetrievalRouter.Evidence>> retrieve(
+            @PathVariable Long bookId,
+            @org.springframework.web.bind.annotation.RequestParam String q,
+            @org.springframework.web.bind.annotation.RequestParam(required = false) Integer topK) {
+        ThrowsUtils.throwIf(bookId == null || bookId <= 0, ErrorCode.PARAMS_ERROR, "无效的书籍ID");
+        ThrowsUtils.throwIf(q == null || q.isBlank(), ErrorCode.PARAMS_ERROR, "查询不能为空");
+        return ResultUtils.success(retrievalRouter.retrieve(bookId, q, topK));
     }
 
     /** 本书正典页清单（可按 entityType 过滤，可选） */

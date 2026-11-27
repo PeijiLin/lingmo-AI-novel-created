@@ -106,7 +106,9 @@ public class CriticAgent {
                 .system(systemPrompt)
                 .user(userPrompt);
         if (context.getBookId() != null) {
-            RetrievalAugmentationAdvisor ragAdvisor = ragAdvisorFactory.forBook(context.getBookId());
+            // M4 检索路由版：正典 SETTING 证据优先（实体定位→锚点下钻），相似度只兜底
+            RetrievalAugmentationAdvisor ragAdvisor =
+                    ragAdvisorFactory.routedForBook(context.getBookId(), null);
             if (ragAdvisor != null) {
                 spec.advisors(ragAdvisor);
             }

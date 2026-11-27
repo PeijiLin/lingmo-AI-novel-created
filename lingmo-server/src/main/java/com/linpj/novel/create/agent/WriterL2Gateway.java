@@ -9,6 +9,7 @@ import com.linpj.novel.create.agent.tool.CanonQueryTool;
 import com.linpj.novel.create.agent.tool.EvidenceCodec;
 import com.linpj.novel.create.agent.tool.ProposalEmitTool;
 import com.linpj.novel.create.agent.tool.SummaryGetTool;
+import com.linpj.novel.create.agent.tool.WikiGetTool;
 import com.linpj.novel.create.config.AutonomyProperties;
 import com.linpj.novel.create.pojo.entity.NovelToolReceipt;
 import com.linpj.novel.create.pojo.pipeline.PipelineRequest;
@@ -122,7 +123,7 @@ public class WriterL2Gateway {
 
         AgentTask task = new AgentTask(runId, nodeId,
                 AgentFence.of(maxSteps, tokenBudget, WRITER_L2_WALL_CLOCK_MS,
-                        Set.of(CanonQueryTool.NAME, SummaryGetTool.NAME, ProposalEmitTool.NAME)),
+                        Set.of(CanonQueryTool.NAME, SummaryGetTool.NAME, ProposalEmitTool.NAME, WikiGetTool.NAME)),
                 systemPrompt(), taskPrompt(request, context), chatClient,
                 writerContract(runId, nodeId),
                 // 预算型降级：L1 单次生成兑底（L2 工具成果不注入——消融基线隔离；
@@ -331,7 +332,7 @@ public class WriterL2Gateway {
 
                 【写作约束】
                 1. 正文必须覆盖本章大纲的全部场景（目标·阻力·选择·状态变化）。
-                2. 涉及角色状态/前文事实时，先调用 canon.query / summary.get 查证再落笔——不得凭空虚构正典事实。
+                2. 涉及角色状态/前文事实时，先调用 canon.query / summary.get 查证再落笔——不得凭空虚构正典事实；涉及设定时调用 wiki.get 查正典页。
                 3. 写作中产生的新状态变更（伤势变化/位置转移等）用 proposal.emit 暂存提案（不会立即入正典）。
                 4. 正文一次性完整交付（finish 的 text 字段），不要分段。
                 5. 引用前文事实时在 claims 绑定 evidenceId（工具回执中的证据地址）。

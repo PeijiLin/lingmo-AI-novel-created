@@ -8,6 +8,7 @@ import com.linpj.novel.create.agent.runtime.DeliverableContract;
 import com.linpj.novel.create.agent.tool.CanonQueryTool;
 import com.linpj.novel.create.agent.tool.RuleCheckTool;
 import com.linpj.novel.create.agent.tool.SummaryGetTool;
+import com.linpj.novel.create.agent.tool.WikiGetTool;
 import com.linpj.novel.create.config.AutonomyProperties;
 import com.linpj.novel.create.pojo.pipeline.ChapterOutline;
 import com.linpj.novel.create.pojo.pipeline.PipelineRequest;
@@ -95,7 +96,7 @@ public class PlannerL2Gateway {
 
         AgentTask task = new AgentTask(runId, nodeId,
                 AgentFence.of(maxSteps, tokenBudget, PLANNER_L2_WALL_CLOCK_MS,
-                        Set.of(CanonQueryTool.NAME, SummaryGetTool.NAME, RuleCheckTool.NAME)),
+                        Set.of(CanonQueryTool.NAME, SummaryGetTool.NAME, RuleCheckTool.NAME, WikiGetTool.NAME)),
                 systemPrompt(), taskPrompt(context), chatClient,
                 outlineContract(),
                 // 预算型降级：L1 单次大纲兜底（L2 工具成果不注入——消融基线隔离）
@@ -200,7 +201,7 @@ public class PlannerL2Gateway {
                 【规划约束】
                 1. 每场景必填 location / conflict（阻力）/ outcome（状态变化，不可逆推进）。
                 2. 产出大纲草案后调用 rulecheck.run 验证（确定性规则）：有 blocking 违规必须修订大纲再验，直至通过。
-                3. 需要角色/前文/时间轴事实时调用 canon.query / summary.get 查证，不得凭空虚构。
+                3. 需要角色/前文/时间轴事实时调用 canon.query / summary.get 查证，不得凭空虚构；涉及设定时调用 wiki.get 查正典页。
                 4. rulecheck 通过且场景完整后调用 agent_finish 收口。
                 """;
     }

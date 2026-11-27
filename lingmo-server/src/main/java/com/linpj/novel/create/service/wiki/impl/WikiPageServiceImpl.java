@@ -117,6 +117,13 @@ public class WikiPageServiceImpl implements WikiPageService {
     }
 
     @Override
+    public List<NovelWikiAnchor> anchorsOf(Long pageId) {
+        return anchorMapper.selectList(new LambdaQueryWrapper<NovelWikiAnchor>()
+                .eq(NovelWikiAnchor::getPageId, pageId)
+                .orderByAsc(NovelWikiAnchor::getId));
+    }
+
+    @Override
     public NovelWikiPage getPage(Long pageId) {
         return requirePage(pageId);
     }

@@ -1,5 +1,6 @@
 package com.linpj.novel.create.agent;
 
+import com.linpj.novel.create.service.retrieval.RetrievalRouter;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.rag.Query;
 import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
@@ -27,13 +28,15 @@ import java.util.stream.Collectors;
 public class RagAdvisorFactory {
 
     private final PgVectorStore vectorStore;
+    private final RetrievalRouter retrievalRouter;
 
     /** 本地无 Embedding Key 时可关闭 RAG 检索，避免每次对话都调 embedding 失败（默认开启） */
     @Value("${novel.pipeline.rag.enabled:true}")
     private boolean ragEnabled;
 
-    public RagAdvisorFactory(PgVectorStore vectorStore) {
+    public RagAdvisorFactory(PgVectorStore vectorStore, RetrievalRouter retrievalRouter) {
         this.vectorStore = vectorStore;
+        this.retrievalRouter = retrievalRouter;
     }
 
     /**
@@ -63,6 +66,24 @@ public class RagAdvisorFactory {
         }
         return RetrievalAugmentationAdvisor.builder()
                 .documentRetriever(builder.build())
+                .queryAugmenter(this::augmentQuery)
+                .build();
+    }
+
+    /**
+     * M4 检索路由版 advisor：三段式（实体定位→锚点下钻→相似度兜底）取代单纯 kNN。
+     * 检索证据带回指 metadata（chunkId/pageId/chapterNum），Critic 引文可回溯正典页。
+     */
+    public RetrievalAugmentationAdvisor routedForBook(Long bookId, Integer topK) {
+        if (!ragEnabled) {
+            return null;
+        }
+        return RetrievalAugmentationAdvisor.builder()
+                .documentRetriever(query -> retrievalRouter
+                        .retrieve(bookId, query.text(), topK)
+                        .stream()
+                        .map(RetrievalRouter::toDocument)
+                        .toList())
                 .queryAugmenter(this::augmentQuery)
                 .build();
     }

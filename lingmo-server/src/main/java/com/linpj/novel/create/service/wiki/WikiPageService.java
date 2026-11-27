@@ -23,6 +23,9 @@ public interface WikiPageService {
     /** 按页取别名 */
     List<String> aliasesOf(Long pageId);
 
+    /** 按页取依据锚点（M4：wiki.get 工具与引文回指的数据源） */
+    List<com.linpj.novel.create.pojo.entity.NovelWikiAnchor> anchorsOf(Long pageId);
+
     /** 按页 ID 取页（不存在抛 404 业务异常） */
     NovelWikiPage getPage(Long pageId);
 

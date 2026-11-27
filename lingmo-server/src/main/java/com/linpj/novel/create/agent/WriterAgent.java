@@ -110,11 +110,11 @@ public class WriterAgent {
         if (variant > 1) {
             spec.options(OpenAiChatOptions.builder().temperature(0.9).build());
         }
-        // RAG：检索本书历史片段作为写作参考（bookId 为空时跳过，与现有 FAST 链路一致）；
-        // 召回数上限由编排器按预算档位注入（M5-F1：L1+ 预警召回减半），null = 默认行为
+        // RAG（M4 检索路由版）：实体定位→锚点下钻→相似度兜底，证据带回指字段
+        // （bookId 为空时跳过，与现有 FAST 链路一致）；召回数上限由编排器按预算档位注入
         if (context.getBookId() != null) {
             RetrievalAugmentationAdvisor ragAdvisor =
-                    ragAdvisorFactory.forBook(context.getBookId(), context.getRagTopLimit());
+                    ragAdvisorFactory.routedForBook(context.getBookId(), context.getRagTopLimit());
             if (ragAdvisor != null) {
                 spec.advisors(ragAdvisor);
             }
