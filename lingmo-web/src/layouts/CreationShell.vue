@@ -8,6 +8,8 @@ defineProps<{
   bookTitle?: string
   /** 章节题（顶栏展示） */
   chapterTitle?: string
+  /** 专注模式：隐藏左右侧栏，让稿纸独占宽度 */
+  focusMode?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -41,13 +43,13 @@ const emit = defineEmits<{
 
     <!-- 三栏主体 -->
     <div class="flex min-h-0 flex-1">
-      <aside class="hidden w-60 shrink-0 border-r border-mist-line bg-paper-surface md:flex md:flex-col">
+      <aside v-if="!focusMode" class="hidden w-60 shrink-0 border-r border-mist-line bg-paper-surface md:flex md:flex-col">
         <slot name="left" />
       </aside>
       <main class="flex min-w-0 flex-1 flex-col">
         <slot />
       </main>
-      <aside class="hidden w-[21rem] shrink-0 border-l border-mist-line bg-paper-surface xl:flex xl:flex-col">
+      <aside v-if="!focusMode" class="hidden w-[21rem] shrink-0 border-l border-mist-line bg-paper-surface xl:flex xl:flex-col">
         <slot name="right" />
       </aside>
     </div>

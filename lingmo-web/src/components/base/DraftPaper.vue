@@ -223,13 +223,17 @@ function recomputeNoteLayouts() {
     return
   }
   const editorRect = view.dom.getBoundingClientRect()
+  // 朱批浮层从稿纸列顶部起算，而锚点坐标相对编辑器；改用浮层顶部消除内边距偏移。
+  const layerRect =
+    paperEl.value.querySelector<HTMLElement>('[data-note-layer]')?.getBoundingClientRect() ??
+    editorRect
   const layouts: NoteLayout[] = []
   for (const note of props.notes) {
     if (note.status === 'dismissed') continue
     const pos = Math.min(Math.max(note.anchorPos, 0), view.state.doc.content.size)
     try {
       const coords = view.coordsAtPos(pos)
-      layouts.push({ id: note.id, top: coords.top - editorRect.top })
+      layouts.push({ id: note.id, top: coords.top - layerRect.top })
     } catch {
       // 锚点失效（文档结构变化后越界）：跳过，不阻塞其他批注
     }
@@ -277,6 +281,7 @@ onBeforeUnmount(() => {
 })
 
 const visibleNotes = computed(() => props.notes.filter((n) => n.status !== 'dismissed'))
+const hasMarginNotes = computed(() => props.marginNotes && visibleNotes.value.length > 0)
 
 function layoutOf(id: number): NoteLayout | undefined {
   return noteLayouts.value.find((l) => l.id === id)
@@ -333,12 +338,18 @@ const toolbar = computed<ToolButton[]>(() => {
 
     <!-- 稿纸主体 -->
     <div class="relative min-h-0 flex-1 overflow-y-auto bg-paper">
-      <div class="paper-column relative mx-auto w-full max-w-3xl px-6 py-10 lg:px-10 lg:pr-[19.5rem]">
-        <EditorContent :editor="editor" class="paper-editor" />
+      <div
+        class="paper-column relative mx-auto w-full max-w-6xl px-6 py-10 lg:px-10"
+        :class="hasMarginNotes ? 'lg:pr-[19.5rem]' : ''"
+      >
+        <div class="mx-auto w-full max-w-[42rem]">
+          <EditorContent :editor="editor" class="paper-editor" />
+        </div>
 
-        <!-- 浮动朱批层：锚定段落边际（宽屏稿纸右栏；窄屏收进右侧抽屉） -->
+        <!-- 浮动朱批层：仅在有朱批时占用右侧边际（宽屏；窄屏收进右侧抽屉） -->
         <div
-          v-if="marginNotes"
+          v-if="hasMarginNotes"
+          data-note-layer
           class="pointer-events-none absolute inset-y-0 right-6 z-10 hidden w-[16.5rem] lg:right-10 lg:block"
           aria-label="朱批旁注"
         >

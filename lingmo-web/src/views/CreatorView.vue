@@ -7,7 +7,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Sparkles, Save, Send, History, ShieldCheck, ListTree } from 'lucide-vue-next'
+import { Sparkles, Save, Send, History, ShieldCheck, ListTree, Maximize2, Minimize2 } from 'lucide-vue-next'
 import CreationShell from '@/layouts/CreationShell.vue'
 import { Button, Dialog, Input, Sheet } from '@/components/ui'
 import ChapterTree from '@/components/base/ChapterTree.vue'
@@ -41,6 +41,7 @@ const book = ref<BookInfoVo | null>(null)
 const chapterTitle = ref('')
 const chapters = useChapters(bookId)
 const paperRef = ref<InstanceType<typeof DraftPaper> | null>(null)
+const focusMode = ref(false)
 
 const currentChapter = computed<ChapterDraft | null>(() => chapters.currentChapter.value)
 
@@ -340,7 +341,7 @@ const runInspectorOpen = ref(false)
 </script>
 
 <template>
-  <CreationShell :book-title="book?.bookName" @back="router.push('/workbench')">
+  <CreationShell :book-title="book?.bookName" :focus-mode="focusMode" @back="router.push('/workbench')">
     <template #title>
       <span class="font-book text-sm font-semibold text-ink">{{ book?.bookName || '未命名作品' }}</span>
       <input
@@ -354,9 +355,26 @@ const runInspectorOpen = ref(false)
     <template #actions>
       <div class="ml-auto flex shrink-0 items-center gap-1">
         <!-- 窄屏：章节树抽屉（顶栏空间有限，按钮只留图标） -->
-        <Button variant="ghost" size="sm" class="md:hidden" aria-label="章节目录" @click="chapterSheetOpen = true">
+        <Button
+          variant="ghost"
+          size="sm"
+          :class="focusMode ? '' : 'md:hidden'"
+          aria-label="章节目录"
+          @click="chapterSheetOpen = true"
+        >
           <ListTree class="size-3.5" />
           <span class="hidden sm:inline">章节</span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          :aria-label="focusMode ? '退出专注模式' : '专注模式'"
+          :aria-pressed="focusMode"
+          @click="focusMode = !focusMode"
+        >
+          <Minimize2 v-if="focusMode" class="size-3.5 text-cinnabar" />
+          <Maximize2 v-else class="size-3.5" />
+          <span class="hidden sm:inline">{{ focusMode ? '退出专注' : '专注' }}</span>
         </Button>
         <!-- 人审队列：Sheet 内处理，不卸载稿纸 -->
         <Button variant="outline" size="sm" aria-label="人审队列" @click="reviewSheetOpen = true">
@@ -364,7 +382,7 @@ const runInspectorOpen = ref(false)
           <span class="hidden sm:inline">人审{{ pendingReviewCount ? ` ${pendingReviewCount}` : '' }}</span>
         </Button>
         <!-- 窄屏：唤起流水线抽屉 -->
-        <Button variant="outline" size="sm" class="xl:hidden" aria-label="AI 流水线" @click="pipelineSheetOpen = true">
+        <Button variant="outline" size="sm" :class="focusMode ? '' : 'xl:hidden'" aria-label="AI 流水线" @click="pipelineSheetOpen = true">
           <Sparkles class="size-3.5 text-cinnabar" />
           <span class="hidden sm:inline">流水线</span>
         </Button>
