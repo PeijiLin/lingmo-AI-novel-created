@@ -1,0 +1,125 @@
+/**
+ * 纸墨书卷 · 动作库（P0/P1 试点）
+ * 每个动作对应一种纸、墨、印的物理行为，不引入通用 bounce/confetti。
+ * 统一由 html[data-motion] 与 prefers-reduced-motion 降级。
+ */
+
+@keyframes ink-reveal {
+  from {
+    opacity: 0;
+    filter: blur(3px);
+    transform: translateY(1px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+
+@keyframes connector-draw {
+  from {
+    opacity: 0;
+    transform: scaleX(0);
+    transform-origin: right center;
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+    transform-origin: right center;
+  }
+}
+
+@keyframes note-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes seal-stamp {
+  0% {
+    opacity: 0;
+    transform: scale(1.3) rotate(-8deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(0.96) rotate(2deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+@keyframes cut-away {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+@keyframes ink-drop {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.motion-ink-reveal {
+  display: inline;
+  animation: ink-reveal var(--dur-ink) var(--ease-ink) both;
+}
+
+.motion-connector {
+  animation: connector-draw var(--dur-quick) var(--ease-brush) both;
+}
+
+.motion-note-enter {
+  animation: note-enter var(--dur-quick) var(--ease-ink) both;
+}
+
+.motion-seal {
+  animation: seal-stamp var(--dur-stamp) var(--ease-stamp) both;
+}
+
+.motion-cut {
+  animation: cut-away var(--dur-quick) var(--ease-brush) both;
+}
+
+.motion-ink-drop {
+  animation: ink-drop 1.8s var(--ease-ink) infinite;
+}
+
+html[data-motion='off'] .motion-ink-reveal,
+html[data-motion='off'] .motion-connector,
+html[data-motion='off'] .motion-note-enter,
+html[data-motion='off'] .motion-seal,
+html[data-motion='off'] .motion-cut,
+html[data-motion='off'] .motion-ink-drop {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-ink-reveal,
+  .motion-connector,
+  .motion-note-enter,
+  .motion-seal,
+  .motion-cut,
+  .motion-ink-drop {
+    animation: none !important;
+  }
+}

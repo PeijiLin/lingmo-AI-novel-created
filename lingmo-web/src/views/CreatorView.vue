@@ -21,6 +21,7 @@ import { useReviewQueue } from '@/composables/useReviewQueue'
 import { explainAiError } from '@/utils/aiError'
 import { useChapters } from '@/composables/useChapters'
 import { useAiCreation, type AiAction } from '@/composables/useAiCreation'
+import { useMotionPreference } from '@/composables/useMotionPreference'
 import { getBookInfo, publishBook } from '@/api/books'
 import type { BookInfoVo, ChapterDraft, CreationMode } from '@/api/types'
 import { textToTiptapDoc } from '@/utils/tiptap'
@@ -34,6 +35,9 @@ const bookId = Number(route.params.id)
 if (!Number.isFinite(bookId) || bookId <= 0) {
   router.replace('/workbench')
 }
+
+/** P1 试点：一键开关动效，便于真实使用时对照体验。 */
+const motion = useMotionPreference()
 
 /* ---------------- 书籍与章节 ---------------- */
 
@@ -424,10 +428,20 @@ const runInspectorOpen = ref(false)
           <Sparkles class="size-4 text-cinnabar" />
           <h2 class="font-book text-sm font-semibold text-ink">AI 流水线</h2>
           <Button
-            v-if="ai.state.taskId"
             variant="ghost"
             size="sm"
             class="ml-auto"
+            :aria-pressed="motion.enabled.value"
+            :title="motion.enabled.value ? '关闭动效' : '开启动效'"
+            @click="motion.toggle()"
+          >
+            <Sparkles class="size-3.5" />
+            动效{{ motion.enabled.value ? '开' : '关' }}
+          </Button>
+          <Button
+            v-if="ai.state.taskId"
+            variant="ghost"
+            size="sm"
             @click="runInspectorOpen = true"
           >
             <History class="size-3.5" />
