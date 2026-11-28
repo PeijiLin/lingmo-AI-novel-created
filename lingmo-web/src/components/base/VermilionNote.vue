@@ -4,7 +4,7 @@
  * AI 的续写 / 润色 / 审校结果以稿纸边际的朱砂批注浮现：
  * 朱砂红底卡、墨色文字、细朱线连接锚点、可折叠。
  */
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ChevronDown, Loader2, Check, X, PenLine } from 'lucide-vue-next'
 import type { VermilionNote } from '@/composables/useAiCreation'
 import { useMotionPreference } from '@/composables/useMotionPreference'
@@ -45,6 +45,44 @@ const kindLabel = computed(() => {
 const streaming = computed(() => props.note.status === 'streaming')
 /** 润色草稿态：终稿尚未替换前不允许采纳 */
 const draft = computed(() => !!props.note.draft)
+
+/* ---------------- 流式正文自动贴底 ---------------- */
+
+const bodyRef = ref<HTMLElement | null>(null)
+/** 用户上滚阅读旧内容时暂停贴底；滚回近底部或 REVISION 换新稿时恢复 */
+const stickToBottom = ref(true)
+const NEAR_BOTTOM_PX = 24
+
+function nearBottom(el: HTMLElement) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX
+}
+
+function onBodyScroll() {
+  const el = bodyRef.value
+  if (el) stickToBottom.value = nearBottom(el)
+}
+
+function scrollToBottom() {
+  const el = bodyRef.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+watch(
+  () => [props.note.text.length, props.note.status] as const,
+  ([len, status], old) => {
+    const prevLen = old?.[0] ?? 0
+    const prevStatus = old?.[1] ?? ''
+    if (status === 'streaming' && prevStatus !== 'streaming') stickToBottom.value = true
+    // REVISION 会先把正文清空再灌入：视为新一轮，重新贴底
+    if (len < prevLen) stickToBottom.value = true
+    if (status === 'streaming' && stickToBottom.value) nextTick(scrollToBottom)
+  },
+  { flush: 'post' },
+)
+
+onMounted(() => {
+  if (streaming.value) nextTick(scrollToBottom)
+})
 </script>
 
 <template>
@@ -80,7 +118,11 @@ const draft = computed(() => !!props.note.draft)
     </header>
 
     <div v-show="!collapsed" class="mt-2">
-      <p class="max-h-56 overflow-y-auto font-kai text-[13px] leading-6 whitespace-pre-wrap text-ink">
+      <p
+        ref="bodyRef"
+        class="max-h-56 overflow-y-auto font-kai text-[13px] leading-6 whitespace-pre-wrap text-ink"
+        @scroll="onBodyScroll"
+      >
         <StreamingInkText
           v-if="note.text"
           :text="note.text"
